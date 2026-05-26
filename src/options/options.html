@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Tab Reloader — Settings</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <main class="page">
+      <header class="head">
+        <img src="../../icons/icon128.png" alt="" class="head__icon" />
+        <div>
+          <h1>Tab Reloader</h1>
+          <p class="head__sub">Settings &amp; defaults</p>
+        </div>
+      </header>
+
+      <section class="section">
+        <h2>Default interval</h2>
+        <p class="muted">
+          New tabs use this interval unless you set a per-tab override. This
+          value persists across browser sessions and may sync across your devices.
+        </p>
+        <div class="row">
+          <label class="field">
+            <span>Reload every</span>
+            <input type="number" id="defaultInterval" class="num" min="1" max="1440" step="1" />
+            <span>minutes</span>
+          </label>
+          <button id="saveBtn" class="btn">Save</button>
+        </div>
+        <p id="intervalMsg" class="msg" hidden></p>
+        <p class="muted small">Allowed range: 1–1440 minutes (24 hours). Values outside are clamped.</p>
+      </section>
+
+      <section class="section">
+        <h2>Toolbar badge</h2>
+        <label class="checkrow">
+          <input type="checkbox" id="showBadge" />
+          <span>Show a count of reloading tabs on the toolbar icon</span>
+        </label>
+      </section>
+
+      <section class="section">
+        <h2>Keyboard shortcut</h2>
+        <p class="muted">
+          Quick-add (or toggle) the current tab on the reload list:
+          <kbd id="shortcut">Alt+Shift+R</kbd>
+        </p>
+        <button id="shortcutsBtn" class="btn btn--ghost">Change shortcut…</button>
+        <p class="muted small">
+          Opens the browser's extension-shortcuts page where you can rebind it.
+        </p>
+      </section>
+
+      <section class="section section--note">
+        <h2>How it works</h2>
+        <ul class="notes">
+          <li>The list of reloading tabs is <strong>per session</strong> — it clears when the browser closes.</li>
+          <li>A refresh is <strong>skipped silently</strong> while you're actively viewing that tab.</li>
+          <li>Manually reloading a tab resets its timer to a full interval.</li>
+        </ul>
+      </section>
+    </main>
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

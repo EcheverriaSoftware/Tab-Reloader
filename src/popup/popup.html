@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Tab Reloader</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header class="header">
+      <div class="brand">
+        <img src="../../icons/icon48.png" alt="" class="brand__icon" />
+        <h1 class="brand__title">Tab Reloader</h1>
+      </div>
+      <button id="optionsBtn" class="iconbtn" title="Settings" aria-label="Settings">⚙</button>
+    </header>
+
+    <!-- Current tab -->
+    <section class="card" id="currentCard">
+      <div class="current">
+        <img id="currentFavicon" class="favicon" src="" alt="" />
+        <div class="current__meta">
+          <div id="currentTitle" class="current__title">Current tab</div>
+          <div id="currentUrl" class="current__url"></div>
+        </div>
+        <label class="switch" title="Auto-reload this tab">
+          <input type="checkbox" id="currentToggle" />
+          <span class="switch__slider"></span>
+        </label>
+      </div>
+      <div class="current__controls">
+        <label class="field">
+          <span class="field__label">Every</span>
+          <input type="number" id="currentInterval" class="num" min="1" max="1440" step="1" />
+          <span class="field__label">min</span>
+        </label>
+        <button id="useDefaultBtn" class="linkbtn" hidden>Use default</button>
+        <span id="currentHint" class="hint"></span>
+      </div>
+    </section>
+
+    <!-- Reloading list -->
+    <section class="listsection">
+      <div class="listsection__head">
+        <h2 class="listsection__title">Reloading <span id="count" class="badge">0</span></h2>
+        <button id="pauseAllBtn" class="linkbtn" hidden>Pause all</button>
+      </div>
+      <ul id="list" class="list"></ul>
+      <div id="empty" class="empty" hidden>
+        <p>No tabs are reloading.</p>
+        <p class="empty__hint">
+          Toggle the switch above, or press
+          <kbd id="shortcutHint">Alt+Shift+R</kbd> on any tab.
+        </p>
+      </div>
+    </section>
+
+    <!-- Row template -->
+    <template id="rowTemplate">
+      <li class="row">
+        <img class="favicon" src="" alt="" />
+        <div class="row__meta">
+          <div class="row__title"></div>
+          <div class="row__status"></div>
+        </div>
+        <label class="field field--compact">
+          <input type="number" class="num row__interval" min="1" max="1440" step="1" />
+          <span class="field__label">min</span>
+        </label>
+        <div class="row__actions">
+          <button class="iconbtn row__reload" title="Reload now">↻</button>
+          <button class="iconbtn row__pause" title="Pause"></button>
+          <button class="iconbtn row__remove" title="Remove">✕</button>
+        </div>
+      </li>
+    </template>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

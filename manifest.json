@@ -1,0 +1,43 @@
+{
+  "manifest_version": 3,
+  "name": "Tab Reloader",
+  "version": "1.0.0",
+  "description": "Auto-refresh selected tabs on a recurring interval. Lightweight, per-session, and skips reloading while you're actively using a tab.",
+  "minimum_chrome_version": "102",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "background": {
+    "service_worker": "src/background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Tab Reloader",
+    "default_popup": "src/popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "options_ui": {
+    "page": "src/options/options.html",
+    "open_in_tab": true
+  },
+  "commands": {
+    "toggle-current-tab": {
+      "suggested_key": {
+        "default": "Alt+Shift+R"
+      },
+      "description": "Toggle auto-reload for the current tab"
+    }
+  },
+  "permissions": [
+    "tabs",
+    "alarms",
+    "storage",
+    "idle"
+  ]
+}
