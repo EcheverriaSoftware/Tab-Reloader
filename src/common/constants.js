@@ -15,12 +15,6 @@ export const MIN_INTERVAL_MINUTES = 1;
 /** Maximum interval, in minutes (24h). Open question #5 — bound the high end. */
 export const MAX_INTERVAL_MINUTES = 1440;
 
-/**
- * Idle threshold (seconds) for "active" detection. Fixed at 60s for v1
- * (open question #4). chrome.idle requires >= 15s.
- */
-export const IDLE_THRESHOLD_SECONDS = 60;
-
 // Storage keys.
 export const SESSION_LIST_KEY = "reloadList"; // chrome.storage.session
 export const DEFAULT_INTERVAL_KEY = "defaultIntervalMinutes"; // chrome.storage.sync

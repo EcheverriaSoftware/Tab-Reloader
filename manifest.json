@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Tab Reloader",
   "version": "1.0.0",
-  "description": "Auto-refresh selected tabs on a recurring interval. Lightweight, per-session, and skips reloading while you're actively using a tab.",
+  "description": "Auto-refresh selected tabs on a recurring interval. Lightweight, per-session, and skips reloading the tab you're currently viewing.",
   "minimum_chrome_version": "102",
   "icons": {
     "16": "icons/icon16.png",
@@ -37,7 +37,6 @@
   "permissions": [
     "tabs",
     "alarms",
-    "storage",
-    "idle"
+    "storage"
   ]
 }

@@ -7,7 +7,6 @@
 // triggered ourselves, used to distinguish our reloads from the user's.
 
 import {
-  IDLE_THRESHOLD_SECONDS,
   alarmNameForTab,
   clampInterval,
   tabIdFromAlarmName,
@@ -159,16 +158,18 @@ async function toggleCurrentTab() {
 }
 
 // ---------------------------------------------------------------------------
-// Active detection (§9.4, FR-11)
+// Viewing detection (§9.4, FR-11)
+//
+// The user is "viewing" a tab when it is the active tab in the focused window.
+// No idle/input check is applied: a reader produces no input but must not be
+// interrupted, so input activity is irrelevant to the skip decision.
 // ---------------------------------------------------------------------------
 
-async function isUserActiveOnTab(tabId, tabHint) {
+async function isUserViewingTab(tabId, tabHint) {
   const tab = tabHint ?? (await chrome.tabs.get(tabId).catch(() => null));
   if (!tab || !tab.active) return false;
   const win = await chrome.windows.get(tab.windowId).catch(() => null);
-  if (!win || !win.focused) return false;
-  const idleState = await chrome.idle.queryState(IDLE_THRESHOLD_SECONDS);
-  return idleState === "active";
+  return !!win && win.focused;
 }
 
 // ---------------------------------------------------------------------------
@@ -326,7 +327,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     return;
   }
 
-  if (await isUserActiveOnTab(tabId, tab)) {
+  if (await isUserViewingTab(tabId, tab)) {
     // FR-11: skip this cycle silently; the periodic alarm retries next interval.
     return;
   }

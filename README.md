@@ -2,8 +2,8 @@
 
 A lightweight Manifest V3 browser extension that auto-refreshes the tabs you
 choose, on an interval you choose. The reload list is **per session** (it clears
-when the browser closes) and refreshes are **skipped while you're actively
-viewing the tab**.
+when the browser closes) and refreshes are **skipped while you're viewing the
+tab** (it's the active tab in the focused window).
 
 See [docs/PRD.md](docs/PRD.md) for the full product spec.
 
@@ -13,9 +13,9 @@ See [docs/PRD.md](docs/PRD.md) for the full product spec.
   or the toolbar popup — the shortcut toggles a tab on/off.
 - **Per-tab schedules**: multiple tabs reload independently, each on its own
   interval, with a global default (20 min) and optional per-tab overrides.
-- **Active-skip**: if a refresh comes due while you're actively on that tab
-  (focused window + not idle), the cycle is skipped silently and retried next
-  interval.
+- **Viewing-skip**: if a refresh comes due while you're viewing that tab (it's
+  the active tab in the focused window), the cycle is skipped silently and
+  retried next interval — you might be reading it.
 - **Pause/resume** any tab individually, or pause/resume all at once.
 - **Manual reload resets the timer** — reloading a tab yourself reschedules its
   next auto-refresh a full interval out.
@@ -44,7 +44,7 @@ the quick-add command.
 ```
 manifest.json            MV3 manifest (service worker, command, permissions)
 src/
-  background.js          Service worker: scheduling, active-skip, lifecycle, badge
+  background.js          Service worker: scheduling, viewing-skip, lifecycle, badge
   common/
     constants.js         Shared constants + pure helpers (clamp, alarm names)
     storage.js           chrome.storage wrappers (session list + synced prefs)
@@ -62,10 +62,11 @@ docs/PRD.md              Product requirements
 - **State** lives in `chrome.storage.session` (the active list — cleared on
   browser close) and `chrome.storage.sync` with a `local` fallback (the default
   interval and preferences).
-- **Active detection** combines `chrome.tabs`/`chrome.windows` focus state with
-  `chrome.idle.queryState` (60s threshold).
-- **Permissions** are kept minimal: `tabs`, `alarms`, `storage`, `idle` — no
-  host permissions.
+- **Viewing detection** uses `chrome.tabs`/`chrome.windows` focus state only
+  (active tab + focused window). No idle/input check — a reader producing no
+  input must not be interrupted.
+- **Permissions** are kept minimal: `tabs`, `alarms`, `storage` — no host
+  permissions.
 
 ## Regenerating icons
 
