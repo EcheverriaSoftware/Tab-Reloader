@@ -1,6 +1,8 @@
 import {
   DEFAULT_INTERVAL_MINUTES,
   clampInterval,
+  eventScheduleText,
+  formatTimeOfDay,
 } from "../common/constants.js";
 
 const $ = (sel) => document.querySelector(sel);
@@ -196,6 +198,268 @@ $("#list").addEventListener("change", async (e) => {
   await refresh();
 });
 
+// ===========================================================================
+// Events (current-tab control — docs/EVENTS_PRD.md §8.1)
+// ===========================================================================
+
+const DAY_LABELS = [
+  { d: 0, short: "S", full: "Sunday" },
+  { d: 1, short: "M", full: "Monday" },
+  { d: 2, short: "T", full: "Tuesday" },
+  { d: 3, short: "W", full: "Wednesday" },
+  { d: 4, short: "T", full: "Thursday" },
+  { d: 5, short: "F", full: "Friday" },
+  { d: 6, short: "S", full: "Saturday" },
+];
+
+let eventsState = null;
+let editingId = null; // null while adding a new event
+
+// --- rendering ---
+
+function renderEventList() {
+  const list = $("#eventList");
+  const tpl = $("#eventRowTemplate");
+  list.textContent = "";
+  for (const ev of eventsState.events) {
+    const node = tpl.content.firstElementChild.cloneNode(true);
+    node.dataset.id = ev.id;
+    node.classList.toggle("is-off", !ev.enabled);
+    node.classList.toggle("is-missed", ev.missed);
+    node.querySelector(".evrow__enabled").checked = ev.enabled;
+    node.querySelector(".evrow__label").textContent = ev.label || formatTimeOfDay(ev.time);
+    node.querySelector(".evrow__sub").textContent = eventScheduleText(ev);
+    list.appendChild(node);
+  }
+  $("#eventEmpty").hidden = eventsState.events.length > 0;
+}
+
+function renderEvents() {
+  const cur = eventsState?.current;
+  const noTab = $("#eventNoTab");
+  const reg = $("#eventReg");
+  const panel = $("#eventPanel");
+  const countBadge = $("#eventCount");
+
+  if (!cur || !cur.url) {
+    noTab.hidden = false;
+    reg.hidden = true;
+    panel.hidden = true;
+    countBadge.hidden = true;
+    return;
+  }
+  noTab.hidden = true;
+
+  if (!cur.isEventTab) {
+    reg.hidden = false;
+    panel.hidden = true;
+    countBadge.hidden = true;
+    closeEventForm();
+    return;
+  }
+
+  reg.hidden = true;
+  panel.hidden = false;
+  countBadge.hidden = false;
+  countBadge.textContent = String(eventsState.events.length);
+  renderEventList();
+  $("#eventUnregConfirm").hidden = true;
+  $("#eventUnregBtn").hidden = false;
+}
+
+async function refreshEvents() {
+  eventsState = await send("getEventsState");
+  renderEvents();
+}
+
+// --- add/edit form ---
+
+function buildDayButtons() {
+  const wrap = $("#evDays");
+  wrap.textContent = "";
+  for (const { d, short, full } of DAY_LABELS) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "day";
+    b.dataset.day = String(d);
+    b.textContent = short;
+    b.title = full;
+    b.setAttribute("aria-pressed", "false");
+    wrap.appendChild(b);
+  }
+}
+
+function getFormDays() {
+  return [...$("#evDays").querySelectorAll(".day")]
+    .filter((b) => b.getAttribute("aria-pressed") === "true")
+    .map((b) => Number(b.dataset.day));
+}
+
+function setFormDays(days) {
+  const set = new Set(days);
+  for (const b of $("#evDays").querySelectorAll(".day")) {
+    b.setAttribute("aria-pressed", set.has(Number(b.dataset.day)) ? "true" : "false");
+  }
+}
+
+/** Reflect the one-time checkbox: disable day/preset pickers when it's on. */
+function syncOnceState() {
+  const once = $("#evOnce").checked;
+  $("#evDays").classList.toggle("is-disabled", once);
+  for (const b of $("#evDays").querySelectorAll(".day")) b.disabled = once;
+  for (const b of document.querySelectorAll(".evpresets .chip")) b.disabled = once;
+}
+
+function showFormMsg(text) {
+  const m = $("#evFormMsg");
+  m.textContent = text;
+  m.hidden = false;
+}
+function hideFormMsg() {
+  const m = $("#evFormMsg");
+  m.hidden = true;
+  m.textContent = "";
+}
+
+function openEventForm(ev) {
+  editingId = ev?.id ?? null;
+  $("#evTime").value = ev?.time ?? "";
+  $("#evLabel").value = ev?.label ?? "";
+  $("#evOnce").checked = ev ? ev.oneTime : false;
+  setFormDays(ev && !ev.oneTime ? ev.days : []);
+  syncOnceState();
+  hideFormMsg();
+  $("#eventForm").hidden = false;
+  $("#eventAddBtn").hidden = true;
+  $("#evTime").focus();
+}
+
+function closeEventForm() {
+  editingId = null;
+  $("#eventForm").hidden = true;
+  $("#eventAddBtn").hidden = false;
+  hideFormMsg();
+}
+
+// --- events wiring ---
+
+$("#eventRegBtn").addEventListener("click", async () => {
+  await send("registerCurrentEventTab");
+  await refreshEvents();
+  openEventForm(); // jump straight to adding the first event (flow 7.1)
+});
+
+$("#eventAddBtn").addEventListener("click", () => openEventForm());
+$("#evCancel").addEventListener("click", closeEventForm);
+$("#evOnce").addEventListener("change", syncOnceState);
+
+$("#evDays").addEventListener("click", (e) => {
+  const b = e.target.closest(".day");
+  if (!b || b.disabled) return;
+  b.setAttribute("aria-pressed", b.getAttribute("aria-pressed") === "true" ? "false" : "true");
+});
+
+document.querySelector(".evpresets").addEventListener("click", (e) => {
+  const chip = e.target.closest(".chip");
+  if (!chip) return;
+  $("#evOnce").checked = false;
+  syncOnceState();
+  const days = { weekdays: [1, 2, 3, 4, 5], weekends: [0, 6], daily: [0, 1, 2, 3, 4, 5, 6] };
+  setFormDays(days[chip.dataset.preset] ?? []);
+});
+
+$("#eventForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const cur = eventsState?.current;
+  if (!cur) return;
+  const oneTime = $("#evOnce").checked;
+  const data = {
+    time: $("#evTime").value,
+    label: $("#evLabel").value,
+    oneTime,
+    days: oneTime ? [] : getFormDays(),
+  };
+  if (!data.time) return showFormMsg("Pick a time.");
+  if (!oneTime && data.days.length === 0) {
+    return showFormMsg("Pick at least one day, or choose one-time.");
+  }
+  const res = editingId
+    ? await send("updateEvent", { url: cur.url, id: editingId, patch: data })
+    : await send("addEvent", { url: cur.url, event: data });
+  if (!res?.ok) {
+    if (res?.error === "duplicate") {
+      showFormMsg(`There's already an event at that time (“${res.collidesLabel}”).`);
+    } else {
+      showFormMsg(res?.error || "Couldn't save the event.");
+    }
+    return;
+  }
+  closeEventForm();
+  await refreshEvents();
+});
+
+$("#eventList").addEventListener("click", async (e) => {
+  const row = e.target.closest(".evrow");
+  if (!row) return;
+  const id = row.dataset.id;
+  if (e.target.closest(".evrow__edit")) {
+    const ev = eventsState.events.find((x) => x.id === id);
+    if (ev) openEventForm(ev);
+  } else if (e.target.closest(".evrow__delete")) {
+    await send("deleteEvent", { url: eventsState.current.url, id });
+    if (editingId === id) closeEventForm();
+    await refreshEvents();
+  }
+});
+
+$("#eventList").addEventListener("change", async (e) => {
+  if (!e.target.classList.contains("evrow__enabled")) return;
+  const id = e.target.closest(".evrow").dataset.id;
+  const res = await send("setEventEnabled", {
+    url: eventsState.current.url,
+    id,
+    enabled: e.target.checked,
+  });
+  if (!res?.ok && res?.error === "duplicate") {
+    e.target.checked = false; // re-enabling would collide (EV-9)
+  }
+  await refreshEvents();
+});
+
+$("#eventUnregBtn").addEventListener("click", async () => {
+  // Empty tab: remove outright. Otherwise inline-confirm (EV-2a popup path).
+  if (!eventsState.events.length) {
+    await send("unregisterEventTab", { url: eventsState.current.url });
+    await refreshEvents();
+    return;
+  }
+  $("#eventUnregConfirm").hidden = false;
+  $("#eventUnregBtn").hidden = true;
+});
+
+$("#eventUnregYes").addEventListener("click", async () => {
+  await send("unregisterEventTab", { url: eventsState.current.url });
+  closeEventForm();
+  await refreshEvents();
+});
+
+$("#eventUnregNo").addEventListener("click", () => {
+  $("#eventUnregConfirm").hidden = true;
+  $("#eventUnregBtn").hidden = false;
+});
+
+async function showEventShortcut() {
+  try {
+    const cmds = await chrome.commands.getAll();
+    const cmd = cmds.find((c) => c.name === "toggle-events-tab");
+    const el = $("#eventShortcutHint");
+    if (cmd && cmd.shortcut) el.textContent = cmd.shortcut;
+    else el.textContent = "(unset — set it in chrome://extensions/shortcuts)";
+  } catch {
+    /* commands may be unavailable in some Chromium forks */
+  }
+}
+
 // --- init ------------------------------------------------------------------
 
 async function showShortcut() {
@@ -210,10 +474,17 @@ async function showShortcut() {
   }
 }
 
+// Re-render live when event data changes from another context (a fire in the
+// worker, or edits on the options page) — EV-16 / §9.6.
+chrome.storage.onChanged.addListener((_changes, area) => {
+  if (area === "sync" || area === "local") refreshEvents();
+});
+
 async function init() {
   // Show the configured min/max in placeholders for clarity.
   $("#currentInterval").placeholder = String(DEFAULT_INTERVAL_MINUTES);
-  await Promise.all([refresh(), showShortcut()]);
+  buildDayButtons();
+  await Promise.all([refresh(), refreshEvents(), showShortcut(), showEventShortcut()]);
   tickTimer = setInterval(tick, 1000);
 }
 

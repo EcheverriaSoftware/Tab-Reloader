@@ -334,3 +334,252 @@ kbd {
   padding: 2px 5px;
   background: var(--bg);
 }
+
+/* ===== Events ===== */
+.listsection--events {
+  border-top: 1px solid var(--line);
+}
+
+.btn {
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #fff;
+  font: inherit;
+  padding: 7px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.btn:hover {
+  filter: brightness(1.05);
+}
+
+.btn--block {
+  width: 100%;
+}
+
+.btn--sm {
+  padding: 5px 10px;
+}
+
+.linkbtn--danger {
+  color: var(--danger);
+}
+
+.evreg {
+  text-align: center;
+}
+
+.evreg .empty__hint {
+  margin-top: 8px;
+}
+
+.evlist {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.evrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.evrow.is-off {
+  opacity: 0.65;
+}
+
+.evrow.is-missed {
+  border-color: var(--danger);
+}
+
+.evrow__meta {
+  flex: 1;
+  min-width: 0;
+}
+
+.evrow__label {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.evrow__sub {
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.evrow.is-missed .evrow__sub {
+  color: var(--danger);
+}
+
+.evrow__actions {
+  display: flex;
+  gap: 2px;
+}
+
+/* Smaller toggle for event rows */
+.switch--sm {
+  width: 32px;
+  height: 18px;
+}
+
+.switch--sm .switch__slider {
+  border-radius: 18px;
+}
+
+.switch--sm .switch__slider::before {
+  height: 12px;
+  width: 12px;
+  left: 3px;
+  top: 3px;
+}
+
+.switch--sm input:checked + .switch__slider::before {
+  transform: translateX(14px);
+}
+
+/* Add / edit form */
+.evform {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 10px;
+  margin-bottom: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--accent-weak);
+}
+
+.evform__top {
+  display: flex;
+  gap: 8px;
+}
+
+.evtime,
+.evlabel {
+  padding: 5px 7px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+}
+
+.evtime {
+  flex: 0 0 auto;
+}
+
+.evlabel {
+  flex: 1;
+  min-width: 0;
+}
+
+.evtime:focus-visible,
+.evlabel:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 0;
+}
+
+.evonce {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.daypick {
+  display: flex;
+  gap: 4px;
+}
+
+.daypick.is-disabled {
+  opacity: 0.45;
+}
+
+.day {
+  flex: 1;
+  padding: 5px 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  cursor: pointer;
+}
+
+.day[aria-pressed="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.day:disabled {
+  cursor: not-allowed;
+}
+
+.evpresets {
+  display: flex;
+  gap: 6px;
+}
+
+.chip {
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--accent);
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.chip:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.chip:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.evform__actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.evpanel__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.confirm {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--danger);
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.confirm__actions {
+  display: flex;
+  gap: 6px;
+  flex: 0 0 auto;
+}

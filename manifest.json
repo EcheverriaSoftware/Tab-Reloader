@@ -32,11 +32,18 @@
         "default": "Alt+Shift+R"
       },
       "description": "Toggle auto-reload for the current tab"
+    },
+    "toggle-events-tab": {
+      "suggested_key": {
+        "default": "Alt+Shift+E"
+      },
+      "description": "Add or remove the current tab as an events tab"
     }
   },
   "permissions": [
     "tabs",
     "alarms",
-    "storage"
+    "storage",
+    "notifications"
   ]
 }

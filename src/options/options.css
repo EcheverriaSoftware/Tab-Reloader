@@ -168,3 +168,331 @@ kbd {
   padding: 2px 6px;
   background: var(--bg);
 }
+
+.btn--sm {
+  padding: 5px 10px;
+  font-size: 13px;
+}
+
+/* ===== Events ===== */
+.grouptitle {
+  margin: 28px 0 12px;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.linkbtn {
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+
+.linkbtn:hover {
+  text-decoration: underline;
+}
+
+.linkbtn--danger {
+  color: var(--danger);
+}
+
+.iconbtn {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  padding: 5px;
+  border-radius: 6px;
+}
+
+.iconbtn:hover {
+  background: var(--line);
+  color: var(--fg);
+}
+
+.hint {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 0;
+}
+
+.hint--warn {
+  color: var(--danger);
+}
+
+.missed {
+  margin: 10px 0 0;
+  padding-left: 18px;
+}
+
+.missed li {
+  margin: 4px 0;
+}
+
+#missedSection {
+  border-color: var(--danger);
+}
+
+/* Event tab card */
+.evtab {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 14px;
+  margin-bottom: 12px;
+}
+
+.evtab__head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.evtab__meta {
+  flex: 1;
+  min-width: 0;
+}
+
+.evtab__title {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.evtab__url {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.evlist {
+  list-style: none;
+  margin: 12px 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.evrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.evrow.is-off {
+  opacity: 0.65;
+}
+
+.evrow.is-missed {
+  border-color: var(--danger);
+}
+
+.evrow__meta {
+  flex: 1;
+  min-width: 0;
+}
+
+.evrow__label {
+  font-weight: 600;
+}
+
+.evrow__sub {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.evrow.is-missed .evrow__sub {
+  color: var(--danger);
+}
+
+.evrow__actions {
+  display: flex;
+  gap: 2px;
+}
+
+/* Toggle switch (events) */
+.switch--sm {
+  position: relative;
+  display: inline-block;
+  width: 34px;
+  height: 20px;
+  flex: 0 0 auto;
+}
+
+.switch--sm input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.switch__slider {
+  position: absolute;
+  inset: 0;
+  cursor: pointer;
+  background: var(--line);
+  border-radius: 20px;
+  transition: background 0.15s;
+}
+
+.switch__slider::before {
+  content: "";
+  position: absolute;
+  height: 14px;
+  width: 14px;
+  left: 3px;
+  top: 3px;
+  background: #fff;
+  border-radius: 50%;
+  transition: transform 0.15s;
+}
+
+.switch--sm input:checked + .switch__slider {
+  background: var(--accent);
+}
+
+.switch--sm input:checked + .switch__slider::before {
+  transform: translateX(14px);
+}
+
+.switch--sm input:focus-visible + .switch__slider {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Add / edit form */
+.evform {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--bg);
+}
+
+.evform__top {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.evtime,
+.evlabel {
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--fg);
+  font: inherit;
+}
+
+.evlabel {
+  flex: 1;
+  min-width: 140px;
+}
+
+.evtime:focus-visible,
+.evlabel:focus-visible {
+  outline: 2px solid var(--accent);
+}
+
+.evonce {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.daypick {
+  display: flex;
+  gap: 6px;
+  max-width: 320px;
+}
+
+.daypick.is-disabled {
+  opacity: 0.45;
+}
+
+.day {
+  flex: 1;
+  padding: 7px 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--fg);
+  font: inherit;
+  cursor: pointer;
+}
+
+.day[aria-pressed="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.day:disabled {
+  cursor: not-allowed;
+}
+
+.evpresets {
+  display: flex;
+  gap: 8px;
+}
+
+.chip {
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--accent);
+  font: inherit;
+  font-size: 13px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.chip:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.chip:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.evform__actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.confirm {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 8px 0;
+  padding: 8px 10px;
+  border: 1px solid var(--danger);
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.confirm__actions {
+  display: flex;
+  gap: 8px;
+  flex: 0 0 auto;
+}

@@ -1,13 +1,20 @@
 # Tab Reloader
 
-A lightweight Manifest V3 browser extension that auto-refreshes the tabs you
-choose, on an interval you choose. The reload list is **per session** (it clears
-when the browser closes) and refreshes are **skipped while you're viewing the
-tab** (it's the active tab in the focused window).
+A lightweight Manifest V3 browser extension — and a growing **tab manager**.
+It started as an auto-reloader and now bundles focused, tab-targeted utilities
+in one extension:
 
-See [docs/PRD.md](docs/PRD.md) for the full product spec.
+- **Auto-reload** — refresh chosen tabs on an interval, skipping the tab you're
+  viewing. Per-session.
+- **Events** — time-of-day alerts on a chosen tab (lunch, breaks, shift end)
+  that let you jump to the tab or ignore. Persistent.
+
+See [docs/](docs/) for the documentation hub, or jump to the
+[auto-reload spec](docs/PRD.md) or the [events spec](docs/EVENTS_PRD.md).
 
 ## Features
+
+### Auto-reload
 
 - **Quick add** the current tab with a keyboard shortcut (default `Alt+Shift+R`)
   or the toolbar popup — the shortcut toggles a tab on/off.
@@ -21,6 +28,17 @@ See [docs/PRD.md](docs/PRD.md) for the full product spec.
   next auto-refresh a full interval out.
 - The **default interval persists** (and may sync across devices); the **active
   reload list is never persisted** across sessions.
+
+### Events
+
+- **Attach time-of-day alerts to a tab** — one or many per tab (e.g. break,
+  lunch, end of shift), each at a wall-clock time.
+- **One-time or recurring** on chosen weekdays.
+- **Jump or ignore**: when an event fires, a notification lets you jump straight
+  to the tab (opening it if it isn't already open) or dismiss the alert.
+- **Add/remove a tab** for events with a keyboard shortcut (default
+  `Alt+Shift+E`) or the popup.
+- **Events persist** across sessions and may sync across devices.
 
 ## Load it in Chrome (unpacked)
 
@@ -51,7 +69,10 @@ src/
   popup/                 Toolbar popup: current-tab toggle, list, countdowns
   options/               Options page: default interval, badge, shortcut link
 icons/                   16 / 48 / 128 px icons (generated via tools/gen_icons.py)
-docs/PRD.md              Product requirements
+docs/
+  README.md              Documentation hub (the feature suite)
+  PRD.md                 Auto-reload spec
+  EVENTS_PRD.md          Events spec
 ```
 
 ## How it works (technical)

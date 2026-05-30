@@ -43,14 +43,58 @@
       </section>
 
       <section class="section">
-        <h2>Keyboard shortcut</h2>
+        <h2>Keyboard shortcuts</h2>
         <p class="muted">
-          Quick-add (or toggle) the current tab on the reload list:
+          Add/remove the current tab on the reload list:
           <kbd id="shortcut">Alt+Shift+R</kbd>
         </p>
-        <button id="shortcutsBtn" class="btn btn--ghost">Change shortcut…</button>
+        <p class="muted">
+          Add/remove the current tab as an events tab:
+          <kbd id="eventShortcut">Alt+Shift+E</kbd>
+        </p>
+        <button id="shortcutsBtn" class="btn btn--ghost">Change shortcuts…</button>
         <p class="muted small">
-          Opens the browser's extension-shortcuts page where you can rebind it.
+          Opens the browser's extension-shortcuts page where you can rebind them.
+        </p>
+      </section>
+
+      <h2 class="grouptitle">Events</h2>
+
+      <section class="section">
+        <h2>Alerts</h2>
+        <div class="row">
+          <label class="field">
+            <span>Snooze for</span>
+            <input type="number" id="snoozeMinutes" class="num" min="1" max="120" step="1" />
+            <span>minutes</span>
+          </label>
+        </div>
+        <p id="snoozeMsg" class="msg" hidden></p>
+        <p class="muted small">
+          How long “Snooze” defers a reminder (the “remind me in N minutes” option).
+        </p>
+        <label class="checkrow">
+          <input type="checkbox" id="keepAlerts" />
+          <span>Keep alerts on screen until I act on them (otherwise auto-dismiss)</span>
+        </label>
+        <p class="muted small">Alerts are always silent (no sound).</p>
+      </section>
+
+      <section class="section" id="missedSection" hidden>
+        <h2>Missed events</h2>
+        <p class="muted small">
+          These one-time events were due while the browser was closed, so they
+          didn't fire. Re-enable an event to schedule it again.
+        </p>
+        <ul id="missedList" class="missed"></ul>
+      </section>
+
+      <section class="section">
+        <h2>Your event tabs</h2>
+        <div id="eventTabs"></div>
+        <p id="noEventTabs" class="muted" hidden>
+          No event tabs yet. Open a page and press
+          <kbd id="eventShortcut2">Alt+Shift+E</kbd>, or use the toolbar popup.
         </p>
       </section>
 
@@ -60,9 +104,70 @@
           <li>The list of reloading tabs is <strong>per session</strong> — it clears when the browser closes.</li>
           <li>A refresh is <strong>skipped silently</strong> while you're viewing that tab (it's the active tab in the focused window).</li>
           <li>Manually reloading a tab resets its timer to a full interval.</li>
+          <li>Events <strong>persist across sessions</strong>. An event that was due while the browser was closed does not fire late — recurring events re-arm for next time; missed one-time events are listed above.</li>
         </ul>
       </section>
     </main>
+
+    <!-- Event row template -->
+    <template id="eventRowTemplate">
+      <li class="evrow">
+        <label class="switch switch--sm" title="Enable / disable">
+          <input type="checkbox" class="evrow__enabled" />
+          <span class="switch__slider"></span>
+        </label>
+        <div class="evrow__meta">
+          <div class="evrow__label"></div>
+          <div class="evrow__sub"></div>
+        </div>
+        <div class="evrow__actions">
+          <button class="iconbtn evrow__edit" title="Edit">✎</button>
+          <button class="iconbtn evrow__delete" title="Delete">✕</button>
+        </div>
+      </li>
+    </template>
+
+    <!-- Event tab card template -->
+    <template id="eventTabTemplate">
+      <section class="evtab">
+        <header class="evtab__head">
+          <div class="evtab__meta">
+            <div class="evtab__title"></div>
+            <div class="evtab__url"></div>
+          </div>
+          <button class="linkbtn linkbtn--danger evtab__remove">Remove tab</button>
+        </header>
+        <div class="confirm evtab__confirm" hidden>
+          <span>Remove this tab and all its events?</span>
+          <span class="confirm__actions">
+            <button class="linkbtn linkbtn--danger evtab__remove-yes">Remove</button>
+            <button class="linkbtn evtab__remove-no">Cancel</button>
+          </span>
+        </div>
+        <ul class="evlist evtab__list"></ul>
+        <p class="evtab__empty muted small" hidden>No events on this tab yet.</p>
+        <form class="evform" hidden>
+          <div class="evform__top">
+            <input type="time" class="evtime" required />
+            <input type="text" class="evlabel" placeholder="Label (optional)" maxlength="60" />
+          </div>
+          <label class="evonce"><input type="checkbox" class="evonce-cb" /> One-time only</label>
+          <div class="daypick" aria-label="Repeat on"></div>
+          <div class="evpresets">
+            <button type="button" class="chip" data-preset="weekdays">Weekdays</button>
+            <button type="button" class="chip" data-preset="weekends">Weekends</button>
+            <button type="button" class="chip" data-preset="daily">Daily</button>
+          </div>
+          <p class="evform__msg hint hint--warn" hidden></p>
+          <div class="evform__actions">
+            <button type="submit" class="btn btn--sm">Save event</button>
+            <button type="button" class="linkbtn evform__cancel">Cancel</button>
+          </div>
+        </form>
+        <button class="linkbtn evtab__add">+ Add event</button>
+      </section>
+    </template>
+
     <script type="module" src="options.js"></script>
   </body>
 </html>

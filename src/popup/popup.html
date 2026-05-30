@@ -55,6 +55,83 @@
       </div>
     </section>
 
+    <!-- Events -->
+    <section class="listsection listsection--events">
+      <div class="listsection__head">
+        <h2 class="listsection__title">Events <span id="eventCount" class="badge" hidden>0</span></h2>
+      </div>
+
+      <!-- Not a usable tab -->
+      <div id="eventNoTab" class="empty" hidden>
+        <p>Open a web page to attach time-of-day reminders to it.</p>
+      </div>
+
+      <!-- Not yet registered -->
+      <div id="eventReg" class="evreg" hidden>
+        <button id="eventRegBtn" class="btn btn--block">Add events to this tab</button>
+        <p class="empty__hint">
+          or press <kbd id="eventShortcutHint">Alt+Shift+E</kbd> on any tab.
+        </p>
+      </div>
+
+      <!-- Registered: events for the current tab -->
+      <div id="eventPanel" hidden>
+        <ul id="eventList" class="evlist"></ul>
+        <p id="eventEmpty" class="empty__hint" hidden>No events yet — add one below.</p>
+
+        <form id="eventForm" class="evform" hidden>
+          <div class="evform__top">
+            <input type="time" id="evTime" class="evtime" required />
+            <input type="text" id="evLabel" class="evlabel" placeholder="Label (optional)" maxlength="60" />
+          </div>
+          <label class="evonce">
+            <input type="checkbox" id="evOnce" /> One-time only
+          </label>
+          <div id="evDays" class="daypick" aria-label="Repeat on"></div>
+          <div class="evpresets">
+            <button type="button" class="chip" data-preset="weekdays">Weekdays</button>
+            <button type="button" class="chip" data-preset="weekends">Weekends</button>
+            <button type="button" class="chip" data-preset="daily">Daily</button>
+          </div>
+          <p id="evFormMsg" class="hint hint--warn" hidden></p>
+          <div class="evform__actions">
+            <button type="submit" class="btn btn--sm">Save event</button>
+            <button type="button" id="evCancel" class="linkbtn">Cancel</button>
+          </div>
+        </form>
+
+        <div class="evpanel__foot">
+          <button id="eventAddBtn" class="linkbtn">+ Add event</button>
+          <button id="eventUnregBtn" class="linkbtn linkbtn--danger">Remove tab</button>
+        </div>
+        <div id="eventUnregConfirm" class="confirm" hidden>
+          <span>Remove this tab and its events?</span>
+          <span class="confirm__actions">
+            <button id="eventUnregYes" class="linkbtn linkbtn--danger">Remove</button>
+            <button id="eventUnregNo" class="linkbtn">Cancel</button>
+          </span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Event row template -->
+    <template id="eventRowTemplate">
+      <li class="evrow">
+        <label class="switch switch--sm" title="Enable / disable">
+          <input type="checkbox" class="evrow__enabled" />
+          <span class="switch__slider"></span>
+        </label>
+        <div class="evrow__meta">
+          <div class="evrow__label"></div>
+          <div class="evrow__sub"></div>
+        </div>
+        <div class="evrow__actions">
+          <button class="iconbtn evrow__edit" title="Edit">✎</button>
+          <button class="iconbtn evrow__delete" title="Delete">✕</button>
+        </div>
+      </li>
+    </template>
+
     <!-- Row template -->
     <template id="rowTemplate">
       <li class="row">
