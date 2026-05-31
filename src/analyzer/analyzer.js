@@ -5,7 +5,7 @@
 // on-screen summary + the paste-ready text report, with Save/Copy delivery.
 
 import { analyzeDump } from "./dmp-parser.js";
-import { buildReport } from "./report.js";
+import { buildDetails, buildReport } from "./report.js";
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -24,15 +24,25 @@ const els = {
   declined: $("#declined"),
   declinedMsg: $("#declinedMsg"),
   result: $("#result"),
+  liveBanner: $("#liveBanner"),
   stopHex: $("#stopHex"),
   stopName: $("#stopName"),
   meaning: $("#meaning"),
   fileMeta: $("#fileMeta"),
+  suspectH: $("#suspectH"),
   suspectBody: $("#suspectBody"),
   copyBtn: $("#copyBtn"),
   saveBtn: $("#saveBtn"),
   actionMsg: $("#actionMsg"),
   reportText: $("#reportText"),
+  detailsText: $("#detailsText"),
+};
+
+// Parser confidence → the report's calibrated label (mirrors report.js §7.4).
+const CONFIDENCE_LABEL = {
+  "third-party-present": "medium confidence",
+  "third-party-candidates": "low confidence",
+  none: "no specific driver",
 };
 
 let currentReport = ""; // text backing Copy/Save
@@ -112,20 +122,26 @@ function renderDeclined(message) {
 }
 
 function renderResult(result, file) {
-  const { header, knowledge, modules } = result;
+  const { header, knowledge, modules, isLive } = result;
+
+  els.liveBanner.hidden = !isLive;
 
   els.stopHex.textContent = "0x" + (header.bugcheckCode >>> 0).toString(16).toUpperCase().padStart(8, "0");
   els.stopName.textContent = knowledge ? knowledge.name : "(unrecognized stop code)";
-  els.meaning.textContent = knowledge
-    ? knowledge.meaning
-    : "No curated guidance for this stop code yet — see the full report below for everything extracted.";
-  els.fileMeta.textContent = `${file.name} · ${header.arch} · ${header.processorCount} CPU${header.processorCount === 1 ? "" : "s"} · build ${header.build}`;
+  els.meaning.textContent = isLive
+    ? "Not a crash — Windows captured a live diagnostic snapshot; the PC kept running."
+    : knowledge?.meaning
+      ? knowledge.meaning
+      : "No plain-language description is curated for this code yet — see the report below for everything extracted.";
+  els.fileMeta.textContent = `${file.name} · ${header.arch} · ${header.processorCount} core${header.processorCount === 1 ? "" : "s"} · build ${header.build}`;
 
+  els.suspectH.textContent = `Most likely source (${CONFIDENCE_LABEL[modules.confidence] || "no specific driver"})`;
   renderSuspect(modules);
 
   currentReport = buildReport(result, { toolVersion: extVersion, analyzedAt: Date.now() });
   currentBaseName = file.name.replace(/\.dmp$/i, "") || "dump";
   els.reportText.textContent = currentReport;
+  els.detailsText.textContent = buildDetails(result);
 
   hideActionMsg();
   showOnly(els.result);

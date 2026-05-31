@@ -151,6 +151,16 @@ code {
   color: var(--danger);
 }
 
+/* Live-dump banner */
+.banner {
+  background: var(--warnbg);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line));
+  border-radius: 10px;
+  padding: 10px 14px;
+  margin-bottom: 16px;
+  font-size: 13px;
+}
+
 /* Result */
 .stopcode {
   display: flex;

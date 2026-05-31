@@ -52,6 +52,11 @@
 
       <!-- Result -->
       <section class="card result" id="result" hidden>
+        <div id="liveBanner" class="banner" hidden>
+          Live diagnostic snapshot — <strong>not a crash</strong>. The PC kept running;
+          Windows captured this snapshot for a recoverable condition.
+        </div>
+
         <div class="result__head">
           <div class="result__meta">
             <div class="stopcode">
@@ -65,7 +70,7 @@
         <div class="result__sub" id="fileMeta"></div>
 
         <div class="suspect" id="suspect">
-          <h2 class="suspect__h">Most likely source</h2>
+          <h2 class="suspect__h" id="suspectH">Most likely source</h2>
           <div id="suspectBody"></div>
         </div>
 
@@ -76,8 +81,13 @@
         </div>
 
         <details class="reportwrap" open>
-          <summary>Full report</summary>
+          <summary>Report (paste-ready)</summary>
           <pre id="reportText" class="report"></pre>
+        </details>
+
+        <details class="reportwrap">
+          <summary>Advanced — parameters &amp; all recovered modules</summary>
+          <pre id="detailsText" class="report"></pre>
         </details>
       </section>
     </main>

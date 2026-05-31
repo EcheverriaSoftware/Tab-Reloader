@@ -18,7 +18,7 @@
 // v1 target; MDMP is a documented fast-follow).
 
 import { isGenericOsModule, moduleBasename, vendorForModule } from "./module-vendors.js";
-import { lookupBugcheck, normalizeCode } from "./bugcheck-kb.js";
+import { decodeCode, isLiveDump, lookupBugcheck } from "./bugcheck-kb.js";
 
 // 8-byte signatures at file offset 0.
 const SIG_KERNEL64 = "PAGEDU64"; // 64-bit kernel dump
@@ -105,12 +105,15 @@ function parseKernelHeader(view, family) {
     );
   }
 
-  const bugcheckCode = view.getUint32(o.bugcheckCode, true) >>> 0;
+  const rawBugcheckCode = view.getUint32(o.bugcheckCode, true) >>> 0;
+  const { base, baseHex, variantBits } = decodeCode(rawBugcheckCode);
   const machineType = view.getUint32(o.machineType, true) >>> 0;
 
   return {
-    bugcheckCode,
-    bugcheckHex: normalizeCode(bugcheckCode),
+    rawBugcheckCode, // exact 32-bit value as stored (may carry variant high bits)
+    bugcheckCode: base, // canonical base code, variant bits folded away (§18.4)
+    bugcheckHex: baseHex,
+    variantBits, // non-zero ⇒ a variant / live-dump form
     params, // BigInt[4]
     machineType,
     arch: ARCH[machineType] || `unknown (0x${machineType.toString(16)})`,
@@ -313,7 +316,8 @@ export function analyzeDump(buffer, { fileName = "", fileSize } = {}) {
     fileName,
     fileSize,
     header,
-    knowledge: lookupBugcheck(header.bugcheckCode), // curated entry or null
+    knowledge: lookupBugcheck(header.rawBugcheckCode), // curated/name-only entry or null
+    isLive: isLiveDump(header.rawBugcheckCode), // §18.3: recoverable event, not a crash
     faultAddress, // BigInt | null
     modules, // { list, thirdParty, suspect, confidence, rationale, hasAddresses }
     warnings,

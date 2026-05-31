@@ -1,30 +1,34 @@
 // Plain-text report builder for the DMP File Analyzer (PRD-DMP-Analysis §7.5/§8).
-// Pure: takes the structured result from `analyzeDump()` and returns a single
-// self-contained, paste-ready string. No chrome.*, no DOM — the UI owns delivery
-// (download + clipboard). The structure (headline → stop code → source → causes →
-// next steps → modules → limits → provenance) is the spec; wording can evolve.
+// Pure: takes the structured result from `analyzeDump()` and returns text. The UI
+// owns delivery (download + clipboard).
+//
+// `buildReport()` is the PRIMARY, concise five-part report (§8): What happened →
+// Most likely source (with a confidence tag) → Machine → How to fix → Technical
+// details. It deliberately leads with the answer and keeps hex/parameters/module
+// lists OUT of the default view. `buildDetails()` produces the verbose
+// parameter+module breakdown for the in-app "Advanced" expander only (§7.6).
 
 import { KB_VERSION } from "./bugcheck-kb.js";
 import { formatHex64 } from "./dmp-parser.js";
 
 const TOOL_NAME = "DMP Analyzer";
 
-// Known OS build numbers → marketing name. Build is the dump header's minor
-// version; unknown builds fall back to "Windows (build N)".
+// Known OS build numbers → friendly version (§7.2). Build is the dump header's
+// minor version; unknown builds fall back to a generic, never-guessed label.
 const OS_BUILDS = {
-  26100: "Windows 11 24H2",
-  22631: "Windows 11 23H2",
-  22621: "Windows 11 22H2",
-  22000: "Windows 11 21H2",
-  19045: "Windows 10 22H2",
-  19044: "Windows 10 21H2",
-  19043: "Windows 10 21H1",
-  19042: "Windows 10 20H2",
-  19041: "Windows 10 2004",
-  18363: "Windows 10 1909",
-  17763: "Windows 10 1809 / Server 2019",
-  14393: "Windows 10 1607 / Server 2016",
-  10240: "Windows 10 1507",
+  26100: "Windows 11, version 24H2",
+  22631: "Windows 11, version 23H2",
+  22621: "Windows 11, version 22H2",
+  22000: "Windows 11, version 21H2",
+  19045: "Windows 10, version 22H2",
+  19044: "Windows 10, version 21H2",
+  19043: "Windows 10, version 21H1",
+  19042: "Windows 10, version 20H2",
+  19041: "Windows 10, version 2004",
+  18363: "Windows 10, version 1909",
+  17763: "Windows 10, version 1809 / Server 2019",
+  14393: "Windows 10, version 1607 / Server 2016",
+  10240: "Windows 10, version 1507",
   9600: "Windows 8.1",
   7601: "Windows 7 SP1",
 };
@@ -37,6 +41,13 @@ function osName(build) {
   return "Windows (unknown version)";
 }
 
+// Architecture as a lay reader expects it.
+function archLabel(arch) {
+  if (arch === "x64") return "64-bit";
+  if (arch === "x86") return "32-bit";
+  return arch || "unknown architecture";
+}
+
 function formatBytes(n) {
   if (typeof n !== "number" || !Number.isFinite(n)) return "size unknown";
   if (n < 1024) return `${n} B`;
@@ -44,139 +55,215 @@ function formatBytes(n) {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-/** 8-digit zero-padded stop-code hex, matching how Windows shows it: 0x000000D1. */
+/** 8-digit zero-padded stop-code hex (for the Advanced view): 0x000000D1. */
 function formatStopCode(code) {
   return "0x" + (code >>> 0).toString(16).toUpperCase().padStart(8, "0");
 }
 
-/** Display label for a module: "name  (vendor)" or just "name" when unknown. */
-function moduleLine(m) {
-  if (m.vendor) return `${m.name}  (${m.vendor})`;
-  if (m.generic) return `${m.name}  (Windows — generic)`;
-  return m.name;
+function lowerFirst(s) {
+  return s ? s.charAt(0).toLowerCase() + s.slice(1) : s;
+}
+
+// Map the parser's name-level confidence onto the report's calibrated scale
+// (§7.4). v1 recovers module names without load addresses, so a single
+// third-party driver caps at *medium*; several at *low*; none at *none*.
+function confidenceOf(modules) {
+  switch (modules.confidence) {
+    case "third-party-present":
+      return "medium";
+    case "third-party-candidates":
+      return "low";
+    default:
+      return "none";
+  }
+}
+
+function moduleLabel(m) {
+  return m.vendor ? `${m.vendor} (${m.name})` : m.name;
+}
+
+// Section header + dashed underline, matching the §8 template's title style.
+function titleBlock(line) {
+  return [line, "-".repeat(line.length)];
 }
 
 /**
- * Build the full plain-text report for a successful analysis result.
- * `opts.toolVersion` (the extension version) and `opts.analyzedAt` (epoch ms)
- * are injected by the UI so this module stays pure.
+ * The concise, paste-ready report (§8). `opts.toolVersion` (extension version)
+ * and `opts.analyzedAt` (epoch ms) are injected by the UI so this stays pure.
  */
 export function buildReport(result, { toolVersion = "1.0", analyzedAt = Date.now() } = {}) {
-  if (!result || !result.ok) {
-    return result?.declined || "No analysis available.";
-  }
+  if (!result || !result.ok) return result?.declined || "No analysis available.";
 
-  const { header, knowledge, faultAddress, modules } = result;
-  const L = []; // lines
+  const { header, knowledge, modules, isLive } = result;
+  const name = knowledge?.name || "(unrecognized stop code)";
+  const conf = confidenceOf(modules);
+  const L = [];
 
-  L.push("WINDOWS CRASH DUMP — ANALYSIS SUMMARY");
-  L.push("=====================================");
-  L.push(`File:        ${result.fileName || "(unnamed)"}   (kernel dump, ${formatBytes(result.fileSize)})`);
+  // Title.
   L.push(
-    `System:      ${osName(header.build)} (build ${header.build}), ${header.arch}, ${header.processorCount} CPU${header.processorCount === 1 ? "" : "s"}`,
+    ...titleBlock(
+      `${isLive ? "Windows Live Diagnostic Snapshot" : "Windows Crash Analysis"} — ${result.fileName || "(unnamed dump)"}`,
+    ),
   );
   L.push("");
 
-  // --- Stop code -----------------------------------------------------------
-  L.push("STOP CODE");
-  L.push("---------");
-  L.push(`${formatStopCode(header.bugcheckCode)}  ${knowledge ? knowledge.name : "(unrecognized stop code)"}`);
-  if (knowledge) {
-    L.push(wrap(knowledge.meaning));
-  } else {
-    L.push(wrap("No curated guidance for this stop code yet — the extracted facts are below."));
+  // 1) What happened.
+  L.push("What happened");
+  L.push(wrapIndent(whatHappened(knowledge, isLive)));
+  L.push("");
+
+  // 2) Most likely source (+ confidence tag).
+  const confTag =
+    conf === "none" ? "(no specific driver)" : `(${conf} confidence)`;
+  L.push(`Most likely source  ${confTag}`);
+  for (const line of sourceLines(modules, knowledge, conf, isLive)) {
+    L.push(wrapIndent(line));
   }
   L.push("");
+
+  // 3) Machine.
+  L.push("Machine");
+  L.push(
+    `  ${osName(header.build)} (build ${header.build}) · ${archLabel(header.arch)} · ${header.processorCount} core${header.processorCount === 1 ? "" : "s"}`,
+  );
+  L.push("");
+
+  // 4) How to fix.
+  L.push("How to fix");
+  fixSteps(knowledge, isLive).forEach((step, i) => L.push(wrapIndent(step, `  ${i + 1}. `, "     ")));
+  L.push("");
+
+  // 5) Technical details (provenance + honest limits).
+  L.push("Technical details");
+  const codeLabel = isLive ? "Live dump code" : "Stop code";
+  let codeLine = `${codeLabel}: ${name} (${header.bugcheckHex})`;
+  if (header.variantBits) codeLine += ` · variant 0x${header.variantBits.toString(16).toUpperCase()}`;
+  L.push(`  ${codeLine}`);
+  L.push("  Analyzed locally — dump not uploaded · module-level analysis (no symbols)");
+  const stamp = new Date(analyzedAt).toISOString().replace("T", " ").replace(/\.\d+Z$/, " UTC");
+  L.push(`  ${TOOL_NAME} v${toolVersion} · knowledge base ${KB_VERSION} · analyzed ${stamp}`);
+
+  return L.join("\n");
+}
+
+function whatHappened(knowledge, isLive) {
+  if (isLive) {
+    const because = knowledge?.meaning ? ` because ${lowerFirst(knowledge.meaning)}` : ` (${knowledge?.name || "recoverable condition"}).`;
+    return `Not a crash — the PC kept running. Windows saved a live diagnostic snapshot${because}`;
+  }
+  if (knowledge?.meaning) return `Windows crashed. ${knowledge.meaning}`;
+  if (knowledge) {
+    return `Windows crashed with stop code ${knowledge.name}. No plain-language description is curated for this code yet — see How to fix and the technical details below.`;
+  }
+  return "Windows crashed, but this stop code is not in the reference table, so it can't be named. The extracted parameters are in the Advanced view.";
+}
+
+function sourceLines(modules, knowledge, conf, isLive) {
+  if (conf === "medium" && modules.suspect) {
+    const tail = isLive ? "stopped responding and was reset." : "the only non-Windows driver found in the dump.";
+    return [
+      `${moduleLabel(modules.suspect)} — leading candidate; ${tail}`,
+      "v1 matches by name, not the exact fault address, so treat this as likely, not proven.",
+    ];
+  }
+  if (conf === "low") {
+    const first = modules.thirdParty[0];
+    const others = modules.thirdParty.slice(1).map((m) => m.name);
+    const lines = [
+      `Possibly ${moduleLabel(first)} — one of several third-party drivers present; this stop code can't be pinned to one without symbols.`,
+    ];
+    if (others.length) lines.push(`Other drivers present: ${others.join(", ")}.`);
+    lines.push("→ If you have other recent dumps from this PC, a driver that recurs is the more reliable suspect.");
+    return lines;
+  }
+  // none — phrase from the code's source category.
+  const cat = knowledge?.category;
+  if (cat === "hardware") {
+    return ["Hardware — the fault came from the CPU/platform, not a driver. Most often bad RAM, overheating, or unstable power/overclock."];
+  }
+  if (cat === "memory") {
+    return ["No specific driver implicated — this stop code most often means defective memory (RAM)."];
+  }
+  return ["No specific driver implicated; this points at memory or hardware. See How to fix, and open the dump in WinDbg for the full stack."];
+}
+
+function fixSteps(knowledge, isLive) {
+  if (knowledge?.nextSteps?.length) return knowledge.nextSteps.slice(0, 3);
+  // Generic fallback for name-only / uncurated codes.
+  const verb = isLive ? "stop the hangs" : "stop the crashes";
+  return [
+    "If a specific driver is named above, update it (or roll it back if the trouble started recently), then restart.",
+    `To rule out memory, press Win+R and run  mdsched  (Windows Memory Diagnostic).`,
+    `If it continues, repair system files: open Command Prompt as admin and run  sfc /scannow  — and check other recent dumps to ${verb}.`,
+  ];
+}
+
+/**
+ * Verbose breakdown for the in-app "Advanced" expander (§7.6): the raw four
+ * parameters with per-code labels, the faulting instruction address, and the
+ * full recovered module list. Never part of the concise report or the download
+ * default — present for the rare power user.
+ */
+export function buildDetails(result) {
+  if (!result || !result.ok) return "";
+  const { header, knowledge, faultAddress, modules } = result;
+  const L = [];
+
+  L.push(`Stop code: ${formatStopCode(header.bugcheckCode)} ${knowledge?.name || "(unrecognized)"}`);
+  if (header.rawBugcheckCode !== header.bugcheckCode) {
+    L.push(`Raw code as stored: ${formatStopCode(header.rawBugcheckCode)} (variant bits folded to base for lookup)`);
+  }
+  L.push("");
+
   L.push("Parameters:");
   for (let i = 0; i < 4; i++) {
     const label = knowledge?.params?.[i] || `Parameter ${i + 1}`;
     L.push(`  ${i + 1}: ${formatHex64(header.params[i])}   (${label})`);
   }
-  L.push("");
-
-  // --- Most likely source --------------------------------------------------
-  L.push("MOST LIKELY SOURCE");
-  L.push("------------------");
-  if (modules.suspect) {
-    L.push(`Suspect module:  ${moduleLine(modules.suspect)}`);
-  } else if (modules.confidence === "third-party-candidates") {
-    L.push("Candidate drivers (could not be ranked without symbols):");
-    for (const m of modules.thirdParty) L.push(`  ${moduleLine(m)}`);
-  } else {
-    L.push("No third-party driver clearly implicated.");
-  }
-  L.push(indentWrap(modules.rationale));
   if (faultAddress != null) {
-    L.push(
-      indentWrap(
-        `The faulting instruction address is ${formatHex64(faultAddress)} (extracted from the stop-code ` +
-          `parameters). v1 cannot map it to a module — open the dump in WinDbg for that.`,
-      ),
-    );
+    L.push("");
+    L.push(`Faulting instruction address: ${formatHex64(faultAddress)}`);
+    L.push("  (v1 recovers module names without load addresses, so this isn't mapped to a module — open in WinDbg for that.)");
   }
   L.push("");
 
-  // --- Probable causes -----------------------------------------------------
-  if (knowledge?.causes?.length) {
-    L.push("PROBABLE CAUSES (most to least common for this stop code)");
-    knowledge.causes.forEach((c, i) => L.push(`  ${i + 1}. ${c}`));
-    L.push("");
-  }
-
-  // --- Recommended next steps ----------------------------------------------
-  if (knowledge?.nextSteps?.length) {
-    L.push("RECOMMENDED NEXT STEPS");
-    for (const s of knowledge.nextSteps) L.push(`  - ${s}`);
-    L.push("");
-  }
-
-  // --- Loaded modules ------------------------------------------------------
   if (modules.list.length) {
-    L.push("LOADED MODULES RECOVERED FROM THE DUMP");
-    for (const m of modules.list) L.push(`  ${moduleLine(m)}`);
-    L.push("");
+    L.push(`Loaded modules recovered (${modules.list.length}):`);
+    for (const m of modules.list) {
+      const tag = m.vendor ? ` — ${m.vendor}` : m.generic ? " — Windows (generic)" : "";
+      L.push(`  ${m.name}${tag}`);
+    }
+  } else {
+    L.push("No module names were recovered from this dump (header headline only).");
   }
 
-  // --- Limitations / honesty notes -----------------------------------------
-  const notes = [
-    "Module-level analysis only — no symbolicated call stack. For function names " +
-      "and line numbers, open this dump in WinDbg.",
-    "Module recovery is name-level (load addresses are not resolved in v1), so the " +
-      "suspect is a hedged candidate, not a proven verdict.",
-    ...(result.warnings || []),
-  ];
-  L.push("LIMITATIONS");
-  for (const n of notes) L.push(`  - ${n}`);
-  L.push("");
-
-  // --- Provenance footer ---------------------------------------------------
-  L.push("-----");
-  const stamp = new Date(analyzedAt).toISOString().replace("T", " ").replace(/\.\d+Z$/, " UTC");
-  L.push(
-    `Generated by ${TOOL_NAME} v${toolVersion}  ·  knowledge base ${KB_VERSION}  ·  ${stamp}  ·  ` +
-      "analyzed locally, dump not uploaded  ·  module-level analysis (no symbols)",
-  );
+  if (result.warnings?.length) {
+    L.push("");
+    L.push("Notes:");
+    for (const w of result.warnings) L.push(`  - ${w}`);
+  }
 
   return L.join("\n");
 }
 
-// Wrap a paragraph to ~78 cols so the report reads cleanly pasted into a ticket.
-function wrap(text, width = 78, indent = "") {
-  const words = String(text).split(/\s+/);
+// --- wrapping helpers ------------------------------------------------------
+
+// Wrap a paragraph to ~76 cols. `first` is the prefix for the first line
+// (default two-space indent); `cont` is the prefix for continuation lines.
+function wrapIndent(text, first = "  ", cont = "  ", width = 76) {
+  const words = String(text).split(/\s+/).filter(Boolean);
   const lines = [];
-  let line = indent;
+  let line = first;
+  let prefixLen = first.length;
   for (const w of words) {
-    if (line.length + w.length + 1 > width && line.trim()) {
+    if (line.length > prefixLen && line.length + w.length + 1 > width) {
       lines.push(line);
-      line = indent + w;
+      line = cont + w;
+      prefixLen = cont.length;
     } else {
-      line += (line === indent ? "" : " ") + w;
+      line += (line.length === prefixLen ? "" : " ") + w;
     }
   }
   if (line.trim()) lines.push(line);
   return lines.join("\n");
-}
-
-function indentWrap(text) {
-  return wrap(text, 78, "  ");
 }
