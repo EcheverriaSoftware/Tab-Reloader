@@ -147,15 +147,21 @@
         <ul class="evlist evtab__list"></ul>
         <p class="evtab__empty muted small" hidden>No events on this tab yet.</p>
         <form class="evform" hidden>
-          <div class="evform__top">
-            <input type="time" class="evtime" required />
-            <input type="text" class="evlabel" placeholder="Label (optional)" maxlength="60" />
+          <input type="text" class="evlabel" placeholder="Label (e.g., Lunch)" maxlength="60" />
+          <div class="evtimes">
+            <label class="evfield">
+              <span class="evfield__label">Clock-in</span>
+              <input type="time" class="evtime evtime--in" required />
+            </label>
+            <label class="evfield">
+              <span class="evfield__label">Clock-out</span>
+              <input type="time" class="evtime evtime--out" required />
+            </label>
           </div>
           <label class="evonce"><input type="checkbox" class="evonce-cb" /> One-time only</label>
           <div class="daypick" aria-label="Repeat on"></div>
           <div class="evpresets">
-            <button type="button" class="chip" data-preset="weekdays">Weekdays</button>
-            <button type="button" class="chip" data-preset="weekends">Weekends</button>
+            <button type="button" class="chip" data-preset="business">Business days (Mon–Fri)</button>
             <button type="button" class="chip" data-preset="daily">Daily</button>
           </div>
           <p class="evform__msg hint hint--warn" hidden></p>

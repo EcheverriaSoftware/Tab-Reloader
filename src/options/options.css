@@ -384,10 +384,22 @@ kbd {
   background: var(--bg);
 }
 
-.evform__top {
+.evtimes {
   display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.evfield {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  max-width: 180px;
+}
+
+.evfield__label {
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .evtime,
@@ -400,9 +412,12 @@ kbd {
   font: inherit;
 }
 
+.evtime {
+  width: 100%;
+}
+
 .evlabel {
-  flex: 1;
-  min-width: 140px;
+  width: 100%;
 }
 
 .evtime:focus-visible,

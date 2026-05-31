@@ -80,17 +80,23 @@
         <p id="eventEmpty" class="empty__hint" hidden>No events yet — add one below.</p>
 
         <form id="eventForm" class="evform" hidden>
-          <div class="evform__top">
-            <input type="time" id="evTime" class="evtime" required />
-            <input type="text" id="evLabel" class="evlabel" placeholder="Label (optional)" maxlength="60" />
+          <input type="text" id="evLabel" class="evlabel" placeholder="Label (e.g., Lunch)" maxlength="60" />
+          <div class="evtimes">
+            <label class="evfield">
+              <span class="evfield__label">Clock-in</span>
+              <input type="time" id="evClockInTime" class="evtime" required />
+            </label>
+            <label class="evfield">
+              <span class="evfield__label">Clock-out</span>
+              <input type="time" id="evClockOutTime" class="evtime" required />
+            </label>
           </div>
           <label class="evonce">
             <input type="checkbox" id="evOnce" /> One-time only
           </label>
           <div id="evDays" class="daypick" aria-label="Repeat on"></div>
           <div class="evpresets">
-            <button type="button" class="chip" data-preset="weekdays">Weekdays</button>
-            <button type="button" class="chip" data-preset="weekends">Weekends</button>
+            <button type="button" class="chip" data-preset="business">Business days (Mon–Fri)</button>
             <button type="button" class="chip" data-preset="daily">Daily</button>
           </div>
           <p id="evFormMsg" class="hint hint--warn" hidden></p>

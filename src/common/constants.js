@@ -82,14 +82,40 @@ export const MAX_SNOOZE_MINUTES = 120;
 
 const DAY_ABBR = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
-/** Build/parse the alarm name for an event id. */
-export function eventAlarmName(id) {
-  return `${EVENT_ALARM_PREFIX}${id}`;
+// An event has two independently-scheduled anchors (§5, §9.4).
+export const ANCHORS = ["in", "out"];
+export const ANCHOR_IN = "in";
+export const ANCHOR_OUT = "out";
+
+/** Storage field name on the event record for an anchor's time-of-day. */
+export function anchorTimeField(anchor) {
+  return anchor === ANCHOR_IN ? "clockInTime" : "clockOutTime";
 }
-export function eventIdFromAlarmName(name) {
+
+/** "Clock in" / "Clock out" — used in notification titles (EV-11). */
+export function anchorActionLabel(anchor) {
+  return anchor === ANCHOR_IN ? "Clock in" : "Clock out";
+}
+
+/** Build the alarm name for an event/anchor pair (§9.4: `event-<id>-in|out`). */
+export function eventAlarmName(id, anchor) {
+  return `${EVENT_ALARM_PREFIX}${id}-${anchor}`;
+}
+
+/**
+ * Parse an event alarm name into `{ id, anchor }`, or null if it isn't ours.
+ * The id can contain dashes (uuids do), so we split on the final dash.
+ */
+export function parseEventAlarmName(name) {
   if (!name || !name.startsWith(EVENT_ALARM_PREFIX)) return null;
-  return name.slice(EVENT_ALARM_PREFIX.length);
+  const rest = name.slice(EVENT_ALARM_PREFIX.length);
+  const lastDash = rest.lastIndexOf("-");
+  if (lastDash < 1) return null;
+  const anchor = rest.slice(lastDash + 1);
+  if (anchor !== ANCHOR_IN && anchor !== ANCHOR_OUT) return null;
+  return { id: rest.slice(0, lastDash), anchor };
 }
+
 export function isSnoozeAlarmName(name) {
   return !!name && name.startsWith(SNOOZE_ALARM_PREFIX);
 }
@@ -185,17 +211,30 @@ export function relativeDay(ts) {
   return new Date(ts).toLocaleDateString([], { weekday: "short" });
 }
 
+/** Compact "In 9:00 AM · Out 5:00 PM" string for a list row's times (§8.1). */
+export function eventTimesText(ev) {
+  return `In ${formatTimeOfDay(ev.clockInTime)} · Out ${formatTimeOfDay(ev.clockOutTime)}`;
+}
+
 /**
- * One-line schedule summary for an event view in a list row (§8.1): time (when
- * a label is shown), recurrence, and either its state or next-fire day.
+ * One-line schedule summary for an event view in a list row (§8.1): the times
+ * (when a label takes the title slot), recurrence, and either its state or the
+ * next imminent anchor.
  */
 export function eventScheduleText(ev) {
   const bits = [];
-  if (ev.label) bits.push(formatTimeOfDay(ev.time)); // else the time is the title
+  if (ev.label) bits.push(eventTimesText(ev)); // else the times are the title
   bits.push(ev.oneTime ? "Once" : daysSummary(ev.days));
-  if (ev.missed) bits.push("missed");
-  else if (!ev.enabled) bits.push("disabled");
-  else if (ev.nextFireAt) bits.push(relativeDay(ev.nextFireAt));
+  const missed = ev.missed || {};
+  if (!ev.enabled) {
+    if (ev.oneTime && (missed.in || missed.out)) {
+      bits.push(missed.in && missed.out ? "missed" : `missed ${missed.in ? "in" : "out"}`);
+    } else {
+      bits.push("disabled");
+    }
+  } else if (ev.nextFireAt && ev.nextFireAnchor) {
+    bits.push(`next ${ev.nextFireAnchor} ${relativeDay(ev.nextFireAt)}`);
+  }
   return bits.filter(Boolean).join(" · ");
 }
 

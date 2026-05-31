@@ -462,9 +462,21 @@ kbd {
   background: var(--accent-weak);
 }
 
-.evform__top {
+.evtimes {
   display: flex;
-  gap: 8px;
+  gap: 10px;
+}
+
+.evfield {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1;
+}
+
+.evfield__label {
+  color: var(--muted);
+  font-size: 11px;
 }
 
 .evtime,
@@ -478,12 +490,11 @@ kbd {
 }
 
 .evtime {
-  flex: 0 0 auto;
+  width: 100%;
 }
 
 .evlabel {
-  flex: 1;
-  min-width: 0;
+  width: 100%;
 }
 
 .evtime:focus-visible,

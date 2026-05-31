@@ -8,17 +8,22 @@
 
 import {
   alarmNameForTab,
+  anchorActionLabel,
+  anchorTimeField,
   clampInterval,
   clampSnooze,
   computeNextOccurrence,
   eventAlarmName,
-  eventIdFromAlarmName,
   formatTimeOfDay,
   genId,
   isSnoozeAlarmName,
   normalizeDays,
+  parseEventAlarmName,
   parseTimeOfDay,
   tabIdFromAlarmName,
+  ANCHORS,
+  ANCHOR_IN,
+  ANCHOR_OUT,
   CONFIRM_NOTIF_PREFIX,
   DEFAULT_INTERVAL_KEY,
   EVENTS_COMMAND,
@@ -284,10 +289,11 @@ async function buildState() {
 // ===========================================================================
 // Events (docs/EVENTS_PRD.md)
 //
-// Time-of-day notifications attached to a tab (identified by URL so they
-// persist across sessions). Each enabled event owns one absolute-`when` alarm
-// named `event-<id>`. State lives in storage, so a suspended worker re-armed by
-// an alarm reads everything fresh — no in-memory event state.
+// Tab-bound clock-in/clock-out reminders. Each event has TWO independently-
+// scheduled anchors (clock-in and clock-out) — each its own absolute-`when`
+// alarm named `event-<id>-in` / `event-<id>-out` (§5, §9.4). State lives in
+// storage, so a suspended worker re-armed by an alarm reads everything fresh —
+// no in-memory event state.
 // ===========================================================================
 
 async function getCurrentTab() {
@@ -306,53 +312,120 @@ async function findEvent(eventId) {
   return null;
 }
 
+// --- shape helpers ---------------------------------------------------------
+
+function anchorTime(event, anchor) {
+  return event[anchorTimeField(anchor)];
+}
+
+/** Ensure per-anchor objects exist (defensive — handles partial/legacy records). */
+function ensureAnchorShape(event) {
+  if (!event.lastFiredAt || typeof event.lastFiredAt !== "object") {
+    event.lastFiredAt = { in: null, out: null };
+  }
+  if (!event.missed || typeof event.missed !== "object") {
+    event.missed = { in: false, out: false };
+  }
+  if (!event.scheduledFor || typeof event.scheduledFor !== "object") {
+    event.scheduledFor = { in: null, out: null };
+  }
+}
+
+/** True once a one-time event has resolved (fired or missed) for an anchor. */
+function anchorResolved(event, anchor) {
+  return event.lastFiredAt[anchor] != null || event.missed[anchor];
+}
+
 // --- scheduling ------------------------------------------------------------
 
-/** (Re)arm an event's alarm to its next occurrence; clears it if unschedulable. */
-async function armEvent(event, now = Date.now()) {
-  await chrome.alarms.clear(eventAlarmName(event.id));
-  if (!event.enabled) {
-    event.scheduledFor = null;
+/** Arm one anchor: clear+recreate its alarm, update its `scheduledFor`. */
+async function armAnchor(event, anchor, now = Date.now()) {
+  ensureAnchorShape(event);
+  const alarmName = eventAlarmName(event.id, anchor);
+  await chrome.alarms.clear(alarmName);
+  if (!event.enabled || (event.oneTime && anchorResolved(event, anchor))) {
+    event.scheduledFor[anchor] = null;
     return;
   }
-  const next = computeNextOccurrence(event.time, event.days, event.oneTime, now);
-  event.scheduledFor = next;
-  if (next != null) await chrome.alarms.create(eventAlarmName(event.id), { when: next });
+  const next = computeNextOccurrence(anchorTime(event, anchor), event.days, event.oneTime, now);
+  event.scheduledFor[anchor] = next;
+  if (next != null) await chrome.alarms.create(alarmName, { when: next });
+}
+
+/** Arm both anchors. */
+async function armEvent(event, now = Date.now()) {
+  for (const anchor of ANCHORS) await armAnchor(event, anchor, now);
+}
+
+/** Clear both anchor alarms (e.g., on delete or disable). */
+async function disarmEvent(eventId) {
+  for (const anchor of ANCHORS) await chrome.alarms.clear(eventAlarmName(eventId, anchor));
 }
 
 // --- duplicate detection (EV-9) --------------------------------------------
 
 /**
- * The set of weekdays an event can fire on, for collision comparison: a
- * recurring event's weekday set, or the single weekday of a one-time event's
- * next occurrence.
+ * Weekday set on which an event will fire — recurring uses its `days`,
+ * one-time collapses to the weekday of its anchor's next occurrence. Both of
+ * an event's anchors share this set (anchors only differ in time-of-day).
  */
-function eventDaySet(ev, now) {
+function eventDaySet(ev, time, now) {
   if (!ev.oneTime) return new Set(normalizeDays(ev.days));
-  const next = computeNextOccurrence(ev.time, [], true, now);
+  const next = computeNextOccurrence(time, [], true, now);
   return next == null ? new Set() : new Set([new Date(next).getDay()]);
 }
 
 /**
- * First enabled event on the tab that collides with `candidate` — same time on
- * an overlapping day (EV-9). `excludeId` skips the event being edited.
+ * EV-9: find the first existing firing on the tab that the candidate would
+ * collide with — same time-of-day on an overlapping weekday. Compared per
+ * firing (clock-in and clock-out are independent anchors). Also rejects the
+ * degenerate self-collision (candidate's own clock-in == clock-out on the same
+ * day(s)).
  */
 function findCollision(events, candidate, excludeId, now = Date.now()) {
-  const candSet = eventDaySet(candidate, now);
+  // Self-collision: an event's own two anchors at the same time on the same days.
+  if (candidate.clockInTime === candidate.clockOutTime) {
+    const selfSet = eventDaySet(candidate, candidate.clockInTime, now);
+    if (selfSet.size > 0) return { selfCollision: true };
+  }
+
   for (const ev of events) {
-    if (ev.id === excludeId || !ev.enabled || ev.time !== candidate.time) continue;
-    const set = eventDaySet(ev, now);
-    for (const d of candSet) if (set.has(d)) return ev;
+    if (ev.id === excludeId || !ev.enabled) continue;
+    for (const candAnchor of ANCHORS) {
+      const candTime = candAnchor === ANCHOR_IN ? candidate.clockInTime : candidate.clockOutTime;
+      const candSet = eventDaySet(candidate, candTime, now);
+      for (const evAnchor of ANCHORS) {
+        const evTime = evAnchor === ANCHOR_IN ? ev.clockInTime : ev.clockOutTime;
+        if (evTime !== candTime) continue;
+        const evSet = eventDaySet(ev, evTime, now);
+        for (const d of candSet) {
+          if (evSet.has(d)) {
+            return { event: ev, evAnchor, candAnchor };
+          }
+        }
+      }
+    }
   }
   return null;
 }
 
-function collisionResult(ev) {
+function collisionResult(clash) {
+  if (clash.selfCollision) {
+    return {
+      ok: false,
+      error: "duplicate",
+      selfCollision: true,
+      message: "Clock-in and clock-out can't be the same time on the same days.",
+    };
+  }
+  const { event, evAnchor, candAnchor } = clash;
   return {
     ok: false,
     error: "duplicate",
-    collidesWith: ev.id,
-    collidesLabel: ev.label || formatTimeOfDay(ev.time),
+    collidesWith: event.id,
+    collidesLabel: event.label || formatTimeOfDay(anchorTime(event, evAnchor)),
+    collideAnchor: evAnchor, // which existing anchor was hit
+    candidateAnchor: candAnchor, // which candidate anchor caused the hit
   };
 }
 
@@ -381,7 +454,7 @@ async function registerEventTab(tab) {
 async function unregisterEventTab(url) {
   const record = await getEventTab(url);
   if (record) {
-    for (const ev of record.events) await chrome.alarms.clear(eventAlarmName(ev.id));
+    for (const ev of record.events) await disarmEvent(ev.id);
   }
   await deleteEventTab(url);
   return { ok: true };
@@ -389,28 +462,45 @@ async function unregisterEventTab(url) {
 
 // --- event CRUD (EV-5..EV-8a) ----------------------------------------------
 
+function validateEventData(data) {
+  if (!parseTimeOfDay(data.clockInTime)) return "Enter a valid clock-in time.";
+  if (!parseTimeOfDay(data.clockOutTime)) return "Enter a valid clock-out time.";
+  if (!data.oneTime && normalizeDays(data.days).length === 0) {
+    return "Pick at least one day, or choose one-time.";
+  }
+  return null;
+}
+
 async function addEvent(url, data) {
   const record = await getEventTab(url);
   if (!record) return { ok: false, error: "This tab isn't registered for events." };
-  if (!parseTimeOfDay(data.time)) return { ok: false, error: "Enter a valid time." };
+  const err = validateEventData(data);
+  if (err) return { ok: false, error: err };
+
   const oneTime = !!data.oneTime;
   const days = oneTime ? [] : normalizeDays(data.days);
-  if (!oneTime && days.length === 0) return { ok: false, error: "Pick at least one day." };
-
-  const candidate = { id: null, time: data.time, days, oneTime, enabled: true };
+  const candidate = {
+    id: null,
+    clockInTime: data.clockInTime,
+    clockOutTime: data.clockOutTime,
+    days,
+    oneTime,
+    enabled: true,
+  };
   const clash = findCollision(record.events, candidate, null);
   if (clash) return collisionResult(clash);
 
   const event = {
     id: genId(),
     label: (data.label || "").trim(),
-    time: data.time,
+    clockInTime: data.clockInTime,
+    clockOutTime: data.clockOutTime,
     days,
     oneTime,
     enabled: true,
-    lastFiredAt: null,
-    missed: false,
-    scheduledFor: null,
+    lastFiredAt: { in: null, out: null },
+    missed: { in: false, out: false },
+    scheduledFor: { in: null, out: null },
   };
   await armEvent(event);
   record.events.push(event);
@@ -418,28 +508,59 @@ async function addEvent(url, data) {
   return { ok: true, id: event.id };
 }
 
-/** Apply a patch (label/time/days/oneTime/enabled) and reschedule from now (EV-7). */
+/**
+ * Apply a patch (label/clockInTime/clockOutTime/days/oneTime/enabled) and
+ * reschedule per EV-7 — only the changed anchors are re-armed unless recurrence
+ * or enabled state changed (then both).
+ */
 async function updateEvent(url, id, patch) {
   const record = await getEventTab(url);
   if (!record) return { ok: false };
   const event = record.events.find((e) => e.id === id);
   if (!event) return { ok: false };
+  ensureAnchorShape(event);
 
   const next = { ...event, ...patch };
   next.oneTime = !!next.oneTime;
   next.days = next.oneTime ? [] : normalizeDays(next.days);
   next.label = (next.label ?? "").trim();
-  if (!parseTimeOfDay(next.time)) return { ok: false, error: "Enter a valid time." };
-  if (!next.oneTime && next.days.length === 0) return { ok: false, error: "Pick at least one day." };
+  const err = validateEventData(next);
+  if (err) return { ok: false, error: err };
   if (next.enabled) {
     const clash = findCollision(record.events, next, id);
     if (clash) return collisionResult(clash);
   }
 
-  // An edit (or re-enable) supersedes a prior missed state (EV-8a).
-  next.missed = false;
+  const inChanged = event.clockInTime !== next.clockInTime;
+  const outChanged = event.clockOutTime !== next.clockOutTime;
+  const recurrenceChanged =
+    event.oneTime !== next.oneTime ||
+    event.days.length !== next.days.length ||
+    event.days.some((d, i) => d !== next.days[i]);
+  const wasEnabled = event.enabled;
+  const willBeEnabled = next.enabled;
+
+  // Edits clear missed state and (for changed/recurrence anchors) lastFiredAt:
+  // the schedule moved, so any prior firing isn't "this occurrence" anymore.
+  next.missed = { in: false, out: false };
+  next.lastFiredAt = {
+    in: inChanged || recurrenceChanged ? null : event.lastFiredAt.in,
+    out: outChanged || recurrenceChanged ? null : event.lastFiredAt.out,
+  };
+  next.scheduledFor = { in: null, out: null }; // armAnchor below will fill
+
   Object.assign(event, next);
-  await armEvent(event);
+
+  if (!willBeEnabled) {
+    await disarmEvent(event.id);
+    event.scheduledFor = { in: null, out: null };
+  } else if (wasEnabled !== willBeEnabled || recurrenceChanged) {
+    await armEvent(event); // re-arm both
+  } else {
+    if (inChanged) await armAnchor(event, ANCHOR_IN);
+    if (outChanged) await armAnchor(event, ANCHOR_OUT);
+    // If neither changed, leave the existing alarms alone (label-only edits).
+  }
   await putEventTab(record);
   return { ok: true };
 }
@@ -450,7 +571,7 @@ async function deleteEvent(url, id) {
   const idx = record.events.findIndex((e) => e.id === id);
   if (idx === -1) return { ok: false };
   record.events.splice(idx, 1);
-  await chrome.alarms.clear(eventAlarmName(id));
+  await disarmEvent(id);
   await putEventTab(record);
   return { ok: true };
 }
@@ -474,16 +595,18 @@ async function toggleEventsTab() {
 
 // --- firing & notifications (EV-11..EV-15) ---------------------------------
 
-/** Show the alert for a firing event and record the id→event mapping. */
-async function showEventNotification(url, record, event) {
+/** Show the alert for a firing anchor and record the notif→{event,anchor} map. */
+async function showEventNotification(url, record, event, anchor) {
   const keep = await getKeepAlertsOnScreen();
-  const notifId = `${EVENT_NOTIF_PREFIX}${event.id}:${Date.now()}`;
-  await putNotif(notifId, { kind: "event", url, eventId: event.id });
-  const when = formatTimeOfDay(event.time);
+  const notifId = `${EVENT_NOTIF_PREFIX}${event.id}:${anchor}:${Date.now()}`;
+  await putNotif(notifId, { kind: "event", url, eventId: event.id, anchor });
+  const when = formatTimeOfDay(anchorTime(event, anchor));
+  const action = anchorActionLabel(anchor); // "Clock in" or "Clock out"
+  const title = event.label ? `${action} — ${event.label}` : `${action} at ${when}`;
   await chrome.notifications.create(notifId, {
     type: "basic",
     iconUrl: chrome.runtime.getURL("icons/icon128.png"),
-    title: event.label || when,
+    title,
     message: `${record.title || url}\n${when}`,
     buttons: [{ title: "Jump to tab" }, { title: "Snooze" }],
     silent: true, // §8.3 — visual only
@@ -524,53 +647,61 @@ async function jumpToUrl(url) {
   }
 }
 
-/** Defer a fired event's reminder by the configured N minutes (EV-13a). */
-async function snoozeEvent(url, eventId) {
+/** Defer a fired anchor's reminder by the configured N minutes (EV-13a). */
+async function snoozeEvent(url, eventId, anchor) {
   const minutes = clampSnooze(await getSnoozeMinutes());
-  const alarmName = `${SNOOZE_ALARM_PREFIX}${eventId}:${Date.now()}`;
-  await putSnooze(alarmName, { url, eventId });
+  const alarmName = `${SNOOZE_ALARM_PREFIX}${eventId}:${anchor}:${Date.now()}`;
+  await putSnooze(alarmName, { url, eventId, anchor });
   await chrome.alarms.create(alarmName, { delayInMinutes: minutes });
 }
 
-/** Core fire: alert, then reschedule (recurring) or auto-disable (one-time). */
-async function fireEvent(eventId) {
+/** Core fire for one anchor: alert, then reschedule or resolve. */
+async function fireEvent(eventId, anchor) {
   const located = await findEvent(eventId);
   if (!located) {
-    await chrome.alarms.clear(eventAlarmName(eventId));
+    await chrome.alarms.clear(eventAlarmName(eventId, anchor));
     return;
   }
   const { url, record, event } = located;
-  if (!event.enabled) return; // defensive; disabled events have no alarm
+  if (!event.enabled) return;
+  ensureAnchorShape(event);
 
-  await showEventNotification(url, record, event);
-  event.lastFiredAt = Date.now();
+  await showEventNotification(url, record, event, anchor);
+  event.lastFiredAt[anchor] = Date.now();
+  event.scheduledFor[anchor] = null;
+
   if (event.oneTime) {
-    event.enabled = false; // EV-8a
-    event.scheduledFor = null;
+    // EV-8a: auto-disable when both anchors are resolved (fired or missed).
+    if (anchorResolved(event, ANCHOR_IN) && anchorResolved(event, ANCHOR_OUT)) {
+      event.enabled = false;
+    }
   } else {
-    await armEvent(event); // EV-15: schedule the next occurrence
+    // EV-15: schedule this anchor's next occurrence.
+    await armAnchor(event, anchor);
   }
   await putEventTab(record);
 }
 
-/** A snooze alarm elapsed — re-show the same alert if the event still exists. */
+/** A snooze alarm elapsed — re-show the same anchor's alert if still resolvable. */
 async function fireSnooze(alarmName) {
   const info = await getSnooze(alarmName);
   await deleteSnooze(alarmName);
   if (!info) return;
   const located = await findEvent(info.eventId);
-  if (located) await showEventNotification(located.url, located.record, located.event);
+  if (located) {
+    await showEventNotification(located.url, located.record, located.event, info.anchor || ANCHOR_IN);
+  }
 }
 
 // --- reconciliation on startup / install (§9.6, EV-16, EV-18) --------------
 
 async function reconcileEvents() {
-  // Drop every event & snooze alarm, then re-arm enabled events from scratch.
+  // Drop every event & snooze alarm, then re-arm enabled anchors from scratch.
   // Snoozes are intentionally not restored (EV-13a, EV-18).
   const alarms = await chrome.alarms.getAll();
   await Promise.all(
     alarms
-      .filter((a) => eventIdFromAlarmName(a.name) !== null || isSnoozeAlarmName(a.name))
+      .filter((a) => parseEventAlarmName(a.name) !== null || isSnoozeAlarmName(a.name))
       .map((a) => chrome.alarms.clear(a.name)),
   );
 
@@ -579,34 +710,70 @@ async function reconcileEvents() {
   for (const url of Object.keys(tabs)) {
     const record = tabs[url];
     let changed = false;
+
+    // Defensive: drop legacy/invalid events missing both required times.
+    const valid = record.events.filter((e) => e.clockInTime && e.clockOutTime);
+    if (valid.length !== record.events.length) {
+      record.events = valid;
+      changed = true;
+    }
+
     for (const event of record.events) {
+      ensureAnchorShape(event);
+
       if (!event.enabled) {
-        if (event.scheduledFor != null) {
-          event.scheduledFor = null;
-          changed = true;
+        for (const a of ANCHORS) {
+          if (event.scheduledFor[a] != null) {
+            event.scheduledFor[a] = null;
+            changed = true;
+          }
         }
         continue;
       }
-      if (event.oneTime) {
-        // Use the time we armed before shutdown; if it passed, it's missed
-        // (no retroactive fire, EV-18). Newly added/unarmed → compute it.
-        if (event.scheduledFor == null) {
-          event.scheduledFor = computeNextOccurrence(event.time, event.days, true, now);
-          changed = true;
+
+      for (const anchor of ANCHORS) {
+        if (event.oneTime) {
+          if (anchorResolved(event, anchor)) {
+            event.scheduledFor[anchor] = null;
+            continue;
+          }
+          // For one-time, prefer the stored armed time; if absent, compute now.
+          if (event.scheduledFor[anchor] == null) {
+            event.scheduledFor[anchor] = computeNextOccurrence(
+              anchorTime(event, anchor),
+              event.days,
+              true,
+              now,
+            );
+            changed = true;
+          }
+          if (event.scheduledFor[anchor] != null && event.scheduledFor[anchor] <= now) {
+            // Missed while the browser was closed (EV-18).
+            event.missed[anchor] = true;
+            event.scheduledFor[anchor] = null;
+            changed = true;
+          } else if (event.scheduledFor[anchor] != null) {
+            await chrome.alarms.create(eventAlarmName(event.id, anchor), {
+              when: event.scheduledFor[anchor],
+            });
+          }
+        } else {
+          // Recurring: always re-arm to the next future occurrence.
+          const prev = event.scheduledFor[anchor];
+          await armAnchor(event, anchor, now);
+          if (event.scheduledFor[anchor] !== prev) changed = true;
         }
-        if (event.scheduledFor != null && event.scheduledFor <= now) {
-          event.enabled = false;
-          event.missed = true;
-          event.scheduledFor = null;
-          changed = true;
-        } else if (event.scheduledFor != null) {
-          await chrome.alarms.create(eventAlarmName(event.id), { when: event.scheduledFor });
-        }
-      } else {
-        // Recurring: always re-arm the next future occurrence.
-        const prev = event.scheduledFor;
-        await armEvent(event, now);
-        if (event.scheduledFor !== prev) changed = true;
+      }
+
+      // EV-8a: a one-time event whose both anchors are now resolved → disable.
+      if (
+        event.oneTime &&
+        anchorResolved(event, ANCHOR_IN) &&
+        anchorResolved(event, ANCHOR_OUT) &&
+        event.enabled
+      ) {
+        event.enabled = false;
+        changed = true;
       }
     }
     if (changed) await putEventTab(record);
@@ -615,23 +782,41 @@ async function reconcileEvents() {
 
 // --- popup / options state -------------------------------------------------
 
-/** Decorate a stored event with its live next-fire time for display. */
+/** Decorate a stored event with live next-fire info for display. */
 async function toEventView(event) {
-  let nextFireAt = event.scheduledFor ?? null;
+  ensureAnchorShape(event);
+  const scheduledFor = { in: null, out: null };
   if (event.enabled) {
-    const alarm = await chrome.alarms.get(eventAlarmName(event.id));
-    if (alarm) nextFireAt = alarm.scheduledTime;
+    for (const anchor of ANCHORS) {
+      const alarm = await chrome.alarms.get(eventAlarmName(event.id, anchor));
+      scheduledFor[anchor] = alarm
+        ? alarm.scheduledTime
+        : (event.scheduledFor[anchor] ?? null);
+    }
+  }
+  // The next imminent anchor — drives the row's "next in/out today" text.
+  let nextFireAt = null;
+  let nextFireAnchor = null;
+  for (const anchor of ANCHORS) {
+    const t = scheduledFor[anchor];
+    if (t != null && (nextFireAt == null || t < nextFireAt)) {
+      nextFireAt = t;
+      nextFireAnchor = anchor;
+    }
   }
   return {
     id: event.id,
     label: event.label,
-    time: event.time,
+    clockInTime: event.clockInTime,
+    clockOutTime: event.clockOutTime,
     days: event.days,
     oneTime: event.oneTime,
     enabled: event.enabled,
-    missed: event.missed,
-    lastFiredAt: event.lastFiredAt,
+    missed: { in: !!event.missed.in, out: !!event.missed.out },
+    lastFiredAt: { in: event.lastFiredAt.in, out: event.lastFiredAt.out },
+    scheduledFor,
     nextFireAt,
+    nextFireAnchor,
   };
 }
 
@@ -750,10 +935,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
 // Core refresh / skip logic (FR-9..FR-12), plus event & snooze firing (§9.4).
 chrome.alarms.onAlarm.addListener(async (alarm) => {
-  // Event firing takes the alarm if it carries an event id or is a snooze.
-  const eventId = eventIdFromAlarmName(alarm.name);
-  if (eventId !== null) {
-    await fireEvent(eventId);
+  // Event firing takes the alarm if it carries an event id+anchor or is a snooze.
+  const parsed = parseEventAlarmName(alarm.name);
+  if (parsed !== null) {
+    await fireEvent(parsed.id, parsed.anchor);
     return;
   }
   if (isSnoozeAlarmName(alarm.name)) {
@@ -847,7 +1032,7 @@ chrome.notifications.onButtonClicked.addListener(async (notifId, btnIdx) => {
   if (!info) return;
   if (info.kind === "event") {
     if (btnIdx === 0) await jumpToUrl(info.url);
-    else if (btnIdx === 1) await snoozeEvent(info.url, info.eventId);
+    else if (btnIdx === 1) await snoozeEvent(info.url, info.eventId, info.anchor || ANCHOR_IN);
   } else if (info.kind === "confirm" && btnIdx === 0) {
     await unregisterEventTab(info.url);
   }

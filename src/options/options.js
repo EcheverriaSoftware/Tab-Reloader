@@ -4,6 +4,7 @@ import {
   clampInterval,
   clampSnooze,
   eventScheduleText,
+  eventTimesText,
   formatTimeOfDay,
 } from "../common/constants.js";
 import {
@@ -128,6 +129,17 @@ function buildDayButtons(container) {
   }
 }
 
+/** Turn a CRUD error response into form-message copy. */
+function formatEventError(res) {
+  if (!res) return "Couldn't save the event.";
+  if (res.error === "duplicate") {
+    if (res.selfCollision) return res.message;
+    const which = res.candidateAnchor === "in" ? "Clock-in" : "Clock-out";
+    return `${which} time already used by another reminder (“${res.collidesLabel}”).`;
+  }
+  return res.error || "Couldn't save the event.";
+}
+
 /** Build a fully-wired card for one event tab (its events + add/edit form). */
 function buildTabCard(tab) {
   const node = $("#eventTabTemplate").content.firstElementChild.cloneNode(true);
@@ -144,7 +156,8 @@ function buildTabCard(tab) {
   const confirm = node.querySelector(".evtab__confirm");
   const daypick = form.querySelector(".daypick");
   const onceCb = form.querySelector(".evonce-cb");
-  const timeInput = form.querySelector(".evtime");
+  const inInput = form.querySelector(".evtime--in");
+  const outInput = form.querySelector(".evtime--out");
   const labelInput = form.querySelector(".evlabel");
   const formMsg = form.querySelector(".evform__msg");
   let editingId = null;
@@ -157,9 +170,9 @@ function buildTabCard(tab) {
     const row = rowTpl.content.firstElementChild.cloneNode(true);
     row.dataset.id = ev.id;
     row.classList.toggle("is-off", !ev.enabled);
-    row.classList.toggle("is-missed", ev.missed);
+    row.classList.toggle("is-missed", ev.missed.in || ev.missed.out);
     row.querySelector(".evrow__enabled").checked = ev.enabled;
-    row.querySelector(".evrow__label").textContent = ev.label || formatTimeOfDay(ev.time);
+    row.querySelector(".evrow__label").textContent = ev.label || eventTimesText(ev);
     row.querySelector(".evrow__sub").textContent = eventScheduleText(ev);
     listEl.appendChild(row);
   }
@@ -188,7 +201,8 @@ function buildTabCard(tab) {
   };
   const openForm = (ev) => {
     editingId = ev?.id ?? null;
-    timeInput.value = ev?.time ?? "";
+    inInput.value = ev?.clockInTime ?? "";
+    outInput.value = ev?.clockOutTime ?? "";
     labelInput.value = ev?.label ?? "";
     onceCb.checked = ev ? ev.oneTime : false;
     setDays(ev && !ev.oneTime ? ev.days : []);
@@ -196,7 +210,7 @@ function buildTabCard(tab) {
     formMsg.hidden = true;
     form.hidden = false;
     addBtn.hidden = true;
-    timeInput.focus();
+    labelInput.focus();
   };
 
   addBtn.addEventListener("click", () => openForm());
@@ -217,7 +231,7 @@ function buildTabCard(tab) {
     if (!chip) return;
     onceCb.checked = false;
     syncOnce();
-    const map = { weekdays: [1, 2, 3, 4, 5], weekends: [0, 6], daily: [0, 1, 2, 3, 4, 5, 6] };
+    const map = { business: [1, 2, 3, 4, 5], daily: [0, 1, 2, 3, 4, 5, 6] };
     setDays(map[chip.dataset.preset] ?? []);
   });
 
@@ -225,12 +239,15 @@ function buildTabCard(tab) {
     e.preventDefault();
     const oneTime = onceCb.checked;
     const data = {
-      time: timeInput.value,
       label: labelInput.value,
+      clockInTime: inInput.value,
+      clockOutTime: outInput.value,
       oneTime,
       days: oneTime ? [] : getDays(),
     };
-    if (!data.time) return showMsg("Pick a time.");
+    if (!data.clockInTime || !data.clockOutTime) {
+      return showMsg("Pick both a clock-in and a clock-out time.");
+    }
     if (!oneTime && data.days.length === 0) {
       return showMsg("Pick at least one day, or choose one-time.");
     }
@@ -238,11 +255,7 @@ function buildTabCard(tab) {
       ? await send("updateEvent", { url, id: editingId, patch: data })
       : await send("addEvent", { url, event: data });
     if (!res?.ok) {
-      showMsg(
-        res?.error === "duplicate"
-          ? `There's already an event at that time (“${res.collidesLabel}”).`
-          : res?.error || "Couldn't save the event.",
-      );
+      showMsg(formatEventError(res));
       return;
     }
     await refreshEvents();
@@ -296,12 +309,16 @@ function renderMissed(tabs) {
   let count = 0;
   for (const tab of tabs) {
     for (const ev of tab.events) {
-      if (!ev.missed) continue;
-      count++;
-      const li = document.createElement("li");
-      const label = ev.label || formatTimeOfDay(ev.time);
-      li.textContent = `${label} (${formatTimeOfDay(ev.time)}) — ${tab.title || tab.url}`;
-      list.appendChild(li);
+      for (const anchor of ["in", "out"]) {
+        if (!ev.missed[anchor]) continue;
+        count++;
+        const li = document.createElement("li");
+        const label = ev.label || eventTimesText(ev);
+        const action = anchor === "in" ? "Clock in" : "Clock out";
+        const t = formatTimeOfDay(anchor === "in" ? ev.clockInTime : ev.clockOutTime);
+        li.textContent = `${action} — ${label} (${t}) — ${tab.title || tab.url}`;
+        list.appendChild(li);
+      }
     }
   }
   $("#missedSection").hidden = count === 0;

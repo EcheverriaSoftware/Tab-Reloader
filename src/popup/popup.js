@@ -2,6 +2,7 @@ import {
   DEFAULT_INTERVAL_MINUTES,
   clampInterval,
   eventScheduleText,
+  eventTimesText,
   formatTimeOfDay,
 } from "../common/constants.js";
 
@@ -225,9 +226,9 @@ function renderEventList() {
     const node = tpl.content.firstElementChild.cloneNode(true);
     node.dataset.id = ev.id;
     node.classList.toggle("is-off", !ev.enabled);
-    node.classList.toggle("is-missed", ev.missed);
+    node.classList.toggle("is-missed", ev.missed.in || ev.missed.out);
     node.querySelector(".evrow__enabled").checked = ev.enabled;
-    node.querySelector(".evrow__label").textContent = ev.label || formatTimeOfDay(ev.time);
+    node.querySelector(".evrow__label").textContent = ev.label || eventTimesText(ev);
     node.querySelector(".evrow__sub").textContent = eventScheduleText(ev);
     list.appendChild(node);
   }
@@ -323,7 +324,8 @@ function hideFormMsg() {
 
 function openEventForm(ev) {
   editingId = ev?.id ?? null;
-  $("#evTime").value = ev?.time ?? "";
+  $("#evClockInTime").value = ev?.clockInTime ?? "";
+  $("#evClockOutTime").value = ev?.clockOutTime ?? "";
   $("#evLabel").value = ev?.label ?? "";
   $("#evOnce").checked = ev ? ev.oneTime : false;
   setFormDays(ev && !ev.oneTime ? ev.days : []);
@@ -331,7 +333,7 @@ function openEventForm(ev) {
   hideFormMsg();
   $("#eventForm").hidden = false;
   $("#eventAddBtn").hidden = true;
-  $("#evTime").focus();
+  $("#evLabel").focus();
 }
 
 function closeEventForm() {
@@ -364,7 +366,7 @@ document.querySelector(".evpresets").addEventListener("click", (e) => {
   if (!chip) return;
   $("#evOnce").checked = false;
   syncOnceState();
-  const days = { weekdays: [1, 2, 3, 4, 5], weekends: [0, 6], daily: [0, 1, 2, 3, 4, 5, 6] };
+  const days = { business: [1, 2, 3, 4, 5], daily: [0, 1, 2, 3, 4, 5, 6] };
   setFormDays(days[chip.dataset.preset] ?? []);
 });
 
@@ -374,12 +376,15 @@ $("#eventForm").addEventListener("submit", async (e) => {
   if (!cur) return;
   const oneTime = $("#evOnce").checked;
   const data = {
-    time: $("#evTime").value,
     label: $("#evLabel").value,
+    clockInTime: $("#evClockInTime").value,
+    clockOutTime: $("#evClockOutTime").value,
     oneTime,
     days: oneTime ? [] : getFormDays(),
   };
-  if (!data.time) return showFormMsg("Pick a time.");
+  if (!data.clockInTime || !data.clockOutTime) {
+    return showFormMsg("Pick both a clock-in and a clock-out time.");
+  }
   if (!oneTime && data.days.length === 0) {
     return showFormMsg("Pick at least one day, or choose one-time.");
   }
@@ -387,16 +392,23 @@ $("#eventForm").addEventListener("submit", async (e) => {
     ? await send("updateEvent", { url: cur.url, id: editingId, patch: data })
     : await send("addEvent", { url: cur.url, event: data });
   if (!res?.ok) {
-    if (res?.error === "duplicate") {
-      showFormMsg(`There's already an event at that time (“${res.collidesLabel}”).`);
-    } else {
-      showFormMsg(res?.error || "Couldn't save the event.");
-    }
+    showFormMsg(formatErrorMsg(res));
     return;
   }
   closeEventForm();
   await refreshEvents();
 });
+
+/** Map a CRUD response error into form-message copy. */
+function formatErrorMsg(res) {
+  if (!res) return "Couldn't save the event.";
+  if (res.error === "duplicate") {
+    if (res.selfCollision) return res.message;
+    const which = res.candidateAnchor === "in" ? "Clock-in" : "Clock-out";
+    return `${which} time already used by another reminder (“${res.collidesLabel}”).`;
+  }
+  return res.error || "Couldn't save the event.";
+}
 
 $("#eventList").addEventListener("click", async (e) => {
   const row = e.target.closest(".evrow");
