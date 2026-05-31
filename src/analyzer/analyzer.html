@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Crash Dump Analyzer</title>
+    <link rel="stylesheet" href="analyzer.css" />
+  </head>
+  <body>
+    <main class="page">
+      <header class="head">
+        <img src="../../icons/icon128.png" alt="" class="head__icon" />
+        <div>
+          <h1>Crash Dump Analyzer</h1>
+          <p class="head__sub">
+            Read a Windows <code>.dmp</code> right here — analyzed locally, nothing is uploaded.
+          </p>
+        </div>
+      </header>
+
+      <!-- Drop zone / picker -->
+      <section
+        class="drop"
+        id="drop"
+        tabindex="0"
+        role="button"
+        aria-label="Drop a .dmp file here or click to browse"
+      >
+        <div class="drop__inner">
+          <div class="drop__icon" aria-hidden="true">⤓</div>
+          <p class="drop__title">Drop a <code>.dmp</code> file here</p>
+          <p class="drop__sub">or <button type="button" id="browseBtn" class="linkbtn">browse…</button></p>
+          <input type="file" id="fileInput" accept=".dmp,.DMP" hidden />
+        </div>
+      </section>
+      <p class="muted small privacy">
+        🔒 The dump is parsed in this tab using the browser only. It never leaves your machine
+        and is never sent to any server. Analysis is <strong>module-level</strong> (no symbols) —
+        for a full call stack, open the dump in WinDbg.
+      </p>
+
+      <!-- Working -->
+      <section class="card status" id="loading" hidden>
+        <p>Analyzing <span id="loadingName"></span>…</p>
+      </section>
+
+      <!-- Declined / error -->
+      <section class="card status status--warn" id="declined" hidden>
+        <h2 id="declinedTitle">Couldn’t analyze this file</h2>
+        <p id="declinedMsg" class="muted"></p>
+      </section>
+
+      <!-- Result -->
+      <section class="card result" id="result" hidden>
+        <div class="result__head">
+          <div class="result__meta">
+            <div class="stopcode">
+              <span id="stopHex" class="stopcode__hex"></span>
+              <span id="stopName" class="stopcode__name"></span>
+            </div>
+            <p id="meaning" class="result__meaning"></p>
+          </div>
+        </div>
+
+        <div class="result__sub" id="fileMeta"></div>
+
+        <div class="suspect" id="suspect">
+          <h2 class="suspect__h">Most likely source</h2>
+          <div id="suspectBody"></div>
+        </div>
+
+        <div class="actions">
+          <button id="copyBtn" class="btn">Copy report</button>
+          <button id="saveBtn" class="btn btn--ghost">Save report (.txt)</button>
+          <span id="actionMsg" class="msg" hidden></span>
+        </div>
+
+        <details class="reportwrap" open>
+          <summary>Full report</summary>
+          <pre id="reportText" class="report"></pre>
+        </details>
+      </section>
+    </main>
+
+    <script type="module" src="analyzer.js"></script>
+  </body>
+</html>

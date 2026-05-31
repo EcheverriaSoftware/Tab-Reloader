@@ -136,6 +136,11 @@ async function refresh() {
 
 $("#optionsBtn").addEventListener("click", () => chrome.runtime.openOptionsPage());
 
+$("#analyzerBtn").addEventListener("click", () => {
+  chrome.tabs.create({ url: chrome.runtime.getURL("src/analyzer/analyzer.html") });
+  window.close();
+});
+
 $("#currentToggle").addEventListener("change", async (e) => {
   const cur = state.current;
   if (!cur) return;

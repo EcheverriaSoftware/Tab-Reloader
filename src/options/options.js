@@ -69,6 +69,10 @@ $("#shortcutsBtn").addEventListener("click", () => {
   chrome.tabs.create({ url: "chrome://extensions/shortcuts" });
 });
 
+$("#analyzerBtn").addEventListener("click", () => {
+  chrome.tabs.create({ url: chrome.runtime.getURL("src/analyzer/analyzer.html") });
+});
+
 async function showShortcut() {
   try {
     const cmds = await chrome.commands.getAll();

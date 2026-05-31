@@ -1,0 +1,299 @@
+/* Crash Dump Analyzer page. Reuses the same design tokens and component idioms
+   as options.css / popup.css so the third pillar looks native to the extension. */
+:root {
+  --bg: #f6f7f9;
+  --card: #ffffff;
+  --fg: #1f2430;
+  --muted: #6b7280;
+  --line: #e5e7eb;
+  --accent: #2563eb;
+  --ok: #16a34a;
+  --danger: #dc2626;
+  --warnbg: #fef3c7;
+  --code: #eef1f6;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14161d;
+    --card: #1b1e27;
+    --fg: #e7e9ee;
+    --muted: #9aa1ad;
+    --line: #2c303b;
+    --accent: #5b8cff;
+    --ok: #4ade80;
+    --danger: #f06363;
+    --warnbg: #3a2f12;
+    --code: #11131a;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+.page {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 32px 20px 64px;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 20px;
+}
+
+.head__icon {
+  width: 48px;
+  height: 48px;
+}
+
+.head h1 {
+  margin: 0;
+  font-size: 22px;
+}
+
+.head__sub {
+  margin: 2px 0 0;
+  color: var(--muted);
+}
+
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: var(--code);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 0.92em;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.small {
+  font-size: 12px;
+}
+
+.privacy {
+  margin: 10px 2px 22px;
+}
+
+/* Drop zone */
+.drop {
+  border: 2px dashed var(--line);
+  border-radius: 14px;
+  background: var(--card);
+  padding: 40px 20px;
+  text-align: center;
+  cursor: pointer;
+  transition:
+    border-color 0.15s,
+    background 0.15s;
+}
+
+.drop:hover,
+.drop:focus-visible {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.drop.is-drag {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--card));
+}
+
+.drop__icon {
+  font-size: 34px;
+  color: var(--accent);
+  line-height: 1;
+}
+
+.drop__title {
+  margin: 12px 0 2px;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.drop__sub {
+  margin: 0;
+  color: var(--muted);
+}
+
+/* Cards (status + result) */
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 18px 20px;
+  margin-top: 16px;
+}
+
+.status p {
+  margin: 0;
+}
+
+.status--warn {
+  border-color: var(--danger);
+}
+
+.status--warn h2 {
+  margin: 0 0 6px;
+  font-size: 15px;
+  color: var(--danger);
+}
+
+/* Result */
+.stopcode {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.stopcode__hex {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.stopcode__name {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--accent);
+  word-break: break-word;
+}
+
+.result__meaning {
+  margin: 8px 0 0;
+  color: var(--fg);
+}
+
+.result__sub {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.suspect {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.suspect__h {
+  margin: 0 0 8px;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.suspect__name {
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.suspect__name code {
+  font-size: 1em;
+}
+
+.suspect__why {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.candidates {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.candidates li {
+  margin: 2px 0;
+}
+
+/* Actions */
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 18px;
+  flex-wrap: wrap;
+}
+
+.btn {
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #fff;
+  font: inherit;
+  padding: 8px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.btn:hover {
+  filter: brightness(1.05);
+}
+
+.btn--ghost {
+  background: transparent;
+  color: var(--accent);
+}
+
+.linkbtn {
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+}
+
+.linkbtn:hover {
+  text-decoration: underline;
+}
+
+.msg {
+  font-size: 13px;
+}
+
+.msg--ok {
+  color: var(--ok);
+}
+
+.msg--warn {
+  color: var(--danger);
+}
+
+/* Full report */
+.reportwrap {
+  margin-top: 18px;
+}
+
+.reportwrap > summary {
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+
+.report {
+  background: var(--code);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 16px;
+  margin: 0;
+  overflow-x: auto;
+  font: 12.5px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
