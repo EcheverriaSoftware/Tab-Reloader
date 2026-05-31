@@ -309,7 +309,7 @@ function renderMissed(tabs) {
   let count = 0;
   for (const tab of tabs) {
     for (const ev of tab.events) {
-      for (const anchor of ["in", "out"]) {
+      for (const anchor of ["out", "in"]) {
         if (!ev.missed[anchor]) continue;
         count++;
         const li = document.createElement("li");

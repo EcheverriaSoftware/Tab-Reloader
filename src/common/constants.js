@@ -211,9 +211,13 @@ export function relativeDay(ts) {
   return new Date(ts).toLocaleDateString([], { weekday: "short" });
 }
 
-/** Compact "In 9:00 AM · Out 5:00 PM" string for a list row's times (§8.1). */
+/**
+ * Compact "Out 12:00 PM · In 12:30 PM" string for a list row's times (§8.1).
+ * Clock-out is shown first to match the form field order — for the primary
+ * break/lunch case the user leaves work (clock-out) before returning (clock-in).
+ */
 export function eventTimesText(ev) {
-  return `In ${formatTimeOfDay(ev.clockInTime)} · Out ${formatTimeOfDay(ev.clockOutTime)}`;
+  return `Out ${formatTimeOfDay(ev.clockOutTime)} · In ${formatTimeOfDay(ev.clockInTime)}`;
 }
 
 /**
