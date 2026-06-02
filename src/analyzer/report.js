@@ -82,6 +82,12 @@ function moduleLabel(m) {
   return m.vendor ? `${m.vendor} (${m.name})` : m.name;
 }
 
+// The one-line Machine summary (§7.5 part 3), shared by the text report and the
+// on-screen view model so they never drift.
+function machineLine(header) {
+  return `${osName(header.build)} (build ${header.build}) · ${archLabel(header.arch)} · ${header.processorCount} core${header.processorCount === 1 ? "" : "s"}`;
+}
+
 // Section header + dashed underline, matching the §8 template's title style.
 function titleBlock(line) {
   return [line, "-".repeat(line.length)];
@@ -90,8 +96,10 @@ function titleBlock(line) {
 /**
  * The concise, paste-ready report (§8). `opts.toolVersion` (extension version)
  * and `opts.analyzedAt` (epoch ms) are injected by the UI so this stays pure.
+ * `opts.includeAdvanced` appends the detected-driver list + raw parameters for
+ * users who explicitly want them (§7.5) — off by default (Simple view).
  */
-export function buildReport(result, { toolVersion = "1.0", analyzedAt = Date.now() } = {}) {
+export function buildReport(result, { toolVersion = "1.0", analyzedAt = Date.now(), includeAdvanced = false } = {}) {
   if (!result || !result.ok) return result?.declined || "No analysis available.";
 
   const { header, knowledge, modules, isLive } = result;
@@ -117,15 +125,15 @@ export function buildReport(result, { toolVersion = "1.0", analyzedAt = Date.now
     conf === "none" ? "(no specific driver)" : `(${conf} confidence)`;
   L.push(`Most likely source  ${confTag}`);
   for (const line of sourceLines(modules, knowledge, conf, isLive)) {
-    L.push(wrapIndent(line));
+    // Hang the "→ …" continuation under its text, matching the §8 template.
+    if (line.startsWith("→ ")) L.push(wrapIndent(line, "  ", "    "));
+    else L.push(wrapIndent(line));
   }
   L.push("");
 
   // 3) Machine.
   L.push("Machine");
-  L.push(
-    `  ${osName(header.build)} (build ${header.build}) · ${archLabel(header.arch)} · ${header.processorCount} core${header.processorCount === 1 ? "" : "s"}`,
-  );
+  L.push(`  ${machineLine(header)}`);
   L.push("");
 
   // 4) How to fix.
@@ -143,7 +151,38 @@ export function buildReport(result, { toolVersion = "1.0", analyzedAt = Date.now
   const stamp = new Date(analyzedAt).toISOString().replace("T", " ").replace(/\.\d+Z$/, " UTC");
   L.push(`  ${TOOL_NAME} v${toolVersion} · knowledge base ${KB_VERSION} · analyzed ${stamp}`);
 
+  if (includeAdvanced) {
+    L.push("");
+    L.push("Advanced details");
+    L.push("----------------");
+    L.push(buildDetails(result));
+  }
+
   return L.join("\n");
+}
+
+/**
+ * Structured Simple-view model for the on-screen card (§7.6), built from the
+ * same helpers as the text report so the two never disagree. Pure; the UI turns
+ * these strings into DOM. Returns null for a non-ok result (the UI shows the
+ * decline message directly).
+ */
+export function viewModel(result) {
+  if (!result || !result.ok) return null;
+  const { header, knowledge, modules, isLive } = result;
+  const conf = confidenceOf(modules);
+  return {
+    isLive,
+    title: isLive ? "Live diagnostic snapshot — not a crash" : "Crash analysis",
+    codeName: knowledge?.name || "(unrecognized stop code)",
+    codeHex: header.bugcheckHex,
+    whatHappened: whatHappened(knowledge, isLive),
+    confidence: conf, // "high" | "medium" | "low" | "none"
+    confidenceLabel: conf === "none" ? "no specific driver" : `${conf} confidence`,
+    sourceLines: sourceLines(modules, knowledge, conf, isLive),
+    machine: machineLine(header),
+    fixSteps: fixSteps(knowledge, isLive),
+  };
 }
 
 function whatHappened(knowledge, isLive) {
@@ -242,6 +281,112 @@ export function buildDetails(result) {
     L.push("Notes:");
     for (const w of result.warnings) L.push(`  - ${w}`);
   }
+
+  return L.join("\n");
+}
+
+// ===========================================================================
+// Batch / multi-dump (§7.1, §7.6, §8). An "entry" is { file, result } where
+// `file` carries at least { name }, and `result` is an analyzeDump() output
+// (ok or declined). These helpers stay pure so the UI and the combined-download
+// share one source of truth; cross-dump recurrence is the strongest single
+// accuracy signal (§7.4), surfaced but never overstated.
+// ===========================================================================
+
+/**
+ * Compact, scannable fields for one batch row (§8 batch table): the filename,
+ * the stop-code name + hex (with a "live" tag), a one-word suspect label, and
+ * the calibrated confidence. Declined files become an honest error row.
+ */
+export function rowFields(entry) {
+  const { file, result } = entry;
+  const fileName = file?.name || result?.fileName || "(unnamed)";
+  if (!result || !result.ok) {
+    return { fileName, ok: false, error: result?.declined || "Could not read this file.", confidence: "—" };
+  }
+  const { header, knowledge, modules, isLive } = result;
+  const codeName = knowledge?.name || "(unrecognized stop code)";
+  const codeHex = isLive ? `${header.bugcheckHex}, live` : header.bugcheckHex;
+  const conf = confidenceOf(modules);
+
+  let suspect;
+  if (conf === "medium" && modules.suspect) suspect = modules.suspect.name;
+  else if (conf === "low") suspect = "several drivers";
+  else suspect = knowledge?.category === "hardware" ? "hardware — no driver" : "no driver";
+
+  return { fileName, ok: true, isLive, codeName, codeHex, suspect, confidence: conf };
+}
+
+/**
+ * Roll a batch of entries into an overview (§8): counts of crash vs live vs
+ * unreadable, and the suspect that recurs across the most dumps — the single
+ * strongest signal (§7.4). `recurring` is null unless a third-party driver shows
+ * up in at least two readable dumps.
+ */
+export function summarizeBatch(entries) {
+  const ok = entries.filter((e) => e.result?.ok);
+  const liveCount = ok.filter((e) => e.result.isLive).length;
+  const unreadable = entries.length - ok.length;
+
+  // Tally third-party drivers across readable dumps (each driver counted at most
+  // once per dump), so recurrence reflects dumps, not raw mentions.
+  const tally = new Map(); // basename → { count, vendor }
+  for (const e of ok) {
+    const seen = new Set();
+    for (const m of e.result.modules.thirdParty) {
+      if (seen.has(m.name)) continue;
+      seen.add(m.name);
+      const cur = tally.get(m.name) || { count: 0, vendor: m.vendor || null };
+      cur.count += 1;
+      tally.set(m.name, cur);
+    }
+  }
+  let recurring = null;
+  for (const [name, { count, vendor }] of tally) {
+    if (count >= 2 && (!recurring || count > recurring.count)) recurring = { name, vendor, count };
+  }
+
+  return {
+    total: entries.length,
+    readable: ok.length,
+    crashes: ok.length - liveCount,
+    liveCount,
+    unreadable,
+    recurring, // { name, vendor, count } | null
+  };
+}
+
+/**
+ * One combined, paste-ready text file for a whole batch (§7.5): a short overview
+ * header (counts + any recurring suspect) followed by one concise per-dump block,
+ * separated by rules. Single-entry batches just return that one report.
+ */
+export function buildBatchReport(entries, opts = {}) {
+  if (entries.length === 1) return buildReport(entries[0].result, opts);
+
+  const s = summarizeBatch(entries);
+  const L = [];
+  const head = `${s.total} dump${s.total === 1 ? "" : "s"} analyzed — ${s.crashes} crash${s.crashes === 1 ? "" : "es"}, ${s.liveCount} live snapshot${s.liveCount === 1 ? "" : "s"}${s.unreadable ? `, ${s.unreadable} unreadable` : ""}`;
+  L.push(...titleBlock(head));
+  if (s.recurring) {
+    const label = s.recurring.vendor ? `${s.recurring.name} (${s.recurring.vendor})` : s.recurring.name;
+    L.push(`Recurring suspect: ${label} — in ${s.recurring.count} of ${s.readable}`);
+  }
+  L.push("");
+  L.push("A recurring driver across dumps is a stronger suspect than any single dump (§7.4).");
+  L.push("");
+
+  entries.forEach((entry, i) => {
+    L.push("=".repeat(78));
+    L.push("");
+    if (!entry.result?.ok) {
+      L.push(...titleBlock(`${entry.file?.name || "(unnamed)"} — could not analyze`));
+      L.push(wrapIndent(entry.result?.declined || "Unrecognized or unreadable file."));
+    } else {
+      L.push(buildReport(entry.result, opts));
+    }
+    if (i < entries.length - 1) L.push("");
+  });
 
   return L.join("\n");
 }

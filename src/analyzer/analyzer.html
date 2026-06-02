@@ -24,18 +24,18 @@
         id="drop"
         tabindex="0"
         role="button"
-        aria-label="Drop a .dmp file here or click to browse"
+        aria-label="Drop one or more .dmp files here or click to browse"
       >
         <div class="drop__inner">
           <div class="drop__icon" aria-hidden="true">⤓</div>
-          <p class="drop__title">Drop a <code>.dmp</code> file here</p>
+          <p class="drop__title">Drop one or more <code>.dmp</code> files here</p>
           <p class="drop__sub">or <button type="button" id="browseBtn" class="linkbtn">browse…</button></p>
-          <input type="file" id="fileInput" accept=".dmp,.DMP" hidden />
+          <input type="file" id="fileInput" accept=".dmp,.DMP" multiple hidden />
         </div>
       </section>
       <p class="muted small privacy">
-        🔒 The dump is parsed in this tab using the browser only. It never leaves your machine
-        and is never sent to any server. Analysis is <strong>module-level</strong> (no symbols) —
+        🔒 Dumps are parsed in this tab using the browser only. They never leave your machine
+        and are never sent to any server. Analysis is <strong>module-level</strong> (no symbols) —
         for a full call stack, open the dump in WinDbg.
       </p>
 
@@ -44,53 +44,76 @@
         <p>Analyzing <span id="loadingName"></span>…</p>
       </section>
 
-      <!-- Declined / error -->
-      <section class="card status status--warn" id="declined" hidden>
-        <h2 id="declinedTitle">Couldn’t analyze this file</h2>
-        <p id="declinedMsg" class="muted"></p>
-      </section>
+      <!-- Results: batch overview + per-file cards -->
+      <section id="results" hidden>
+        <!-- Batch overview (shown only for multiple files) -->
+        <section class="card overview" id="overview" hidden>
+          <h2 class="overview__head" id="overviewHead"></h2>
+          <p class="overview__recurring" id="overviewRecurring" hidden></p>
+          <p class="muted small">A driver that recurs across dumps is a stronger suspect than any single dump.</p>
+        </section>
 
-      <!-- Result -->
-      <section class="card result" id="result" hidden>
-        <div id="liveBanner" class="banner" hidden>
-          Live diagnostic snapshot — <strong>not a crash</strong>. The PC kept running;
-          Windows captured this snapshot for a recoverable condition.
-        </div>
-
-        <div class="result__head">
-          <div class="result__meta">
-            <div class="stopcode">
-              <span id="stopHex" class="stopcode__hex"></span>
-              <span id="stopName" class="stopcode__name"></span>
-            </div>
-            <p id="meaning" class="result__meaning"></p>
-          </div>
-        </div>
-
-        <div class="result__sub" id="fileMeta"></div>
-
-        <div class="suspect" id="suspect">
-          <h2 class="suspect__h" id="suspectH">Most likely source</h2>
-          <div id="suspectBody"></div>
-        </div>
-
-        <div class="actions">
-          <button id="copyBtn" class="btn">Copy report</button>
-          <button id="saveBtn" class="btn btn--ghost">Save report (.txt)</button>
+        <!-- Toolbar: batch view toggle + combined copy/save -->
+        <div class="resultsbar">
+          <label class="advtoggle">
+            <input type="checkbox" id="advAll" />
+            <span>Show advanced details</span>
+          </label>
+          <span class="resultsbar__spacer"></span>
+          <button id="copyBtn" class="btn btn--sm">Copy report</button>
+          <button id="saveBtn" class="btn btn--ghost btn--sm">Save report (.txt)</button>
           <span id="actionMsg" class="msg" hidden></span>
         </div>
 
-        <details class="reportwrap" open>
-          <summary>Report (paste-ready)</summary>
-          <pre id="reportText" class="report"></pre>
-        </details>
-
-        <details class="reportwrap">
-          <summary>Advanced — parameters &amp; all recovered modules</summary>
-          <pre id="detailsText" class="report"></pre>
-        </details>
+        <div id="cards"></div>
       </section>
     </main>
+
+    <!-- Per-file result card -->
+    <template id="cardTemplate">
+      <section class="card filecard">
+        <button class="filecard__bar" type="button">
+          <span class="filecard__name"></span>
+          <span class="filecard__code"></span>
+          <span class="filecard__suspect"></span>
+          <span class="badge badge--conf"></span>
+          <span class="filecard__chevron" aria-hidden="true">▸</span>
+        </button>
+
+        <div class="filecard__body" hidden>
+          <div class="banner filecard__live" hidden>
+            Live diagnostic snapshot — <strong>not a crash</strong>. The PC kept running;
+            Windows captured this snapshot for a recoverable condition.
+          </div>
+
+          <div class="error filecard__error" hidden></div>
+
+          <div class="simple filecard__simple">
+            <div class="block">
+              <h3 class="block__h">What happened</h3>
+              <p class="filecard__what"></p>
+            </div>
+            <div class="block">
+              <h3 class="block__h">Most likely source <span class="block__conf"></span></h3>
+              <div class="filecard__source"></div>
+            </div>
+            <div class="block">
+              <h3 class="block__h">Machine</h3>
+              <p class="filecard__machine"></p>
+            </div>
+            <div class="block">
+              <h3 class="block__h">How to fix</h3>
+              <ol class="filecard__fix fixlist"></ol>
+            </div>
+          </div>
+
+          <details class="reportwrap filecard__advanced" hidden>
+            <summary>Advanced — parameters &amp; all recovered modules</summary>
+            <pre class="report filecard__details"></pre>
+          </details>
+        </div>
+      </section>
+    </template>
 
     <script type="module" src="analyzer.js"></script>
   </body>

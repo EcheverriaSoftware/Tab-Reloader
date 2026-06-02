@@ -1,15 +1,22 @@
 // Crash Dump Analyzer — page controller. The only file in src/analyzer/ that
-// touches the DOM / chrome.* APIs; all parsing and report text come from the
-// pure modules (dmp-parser.js, report.js). Flow: ingest a .dmp (drag-drop or
-// picker) → read the needed byte range via Blob.slice → analyzeDump → render the
-// on-screen summary + the paste-ready text report, with Save/Copy delivery.
+// touches the DOM / chrome.* APIs; all parsing, report text, and the on-screen
+// view model come from the pure modules (dmp-parser.js, report.js). Flow: ingest
+// one or many .dmp files (drag-drop or multi-select picker) → read the needed
+// byte range of each via Blob.slice → analyzeDump → render a per-file card +,
+// for a batch, an overview with recurring-suspect correlation (§7.1/§7.6/§8).
 
 import { analyzeDump } from "./dmp-parser.js";
-import { buildDetails, buildReport } from "./report.js";
+import {
+  buildBatchReport,
+  buildDetails,
+  rowFields,
+  summarizeBatch,
+  viewModel,
+} from "./report.js";
 
 const $ = (sel) => document.querySelector(sel);
 
-// Cap how much of a dump we buffer. The small kernel minidump (the in-extension
+// Cap how much of each dump we buffer. The small kernel minidump (the in-extension
 // sweet spot, ≤ ~2 MB) fits entirely; for a multi-GB MEMORY.DMP we read only the
 // head — enough for the fixed-offset headline + an early triage scan — and the
 // parser flags the module list as possibly incomplete (PRD §7.1).
@@ -21,34 +28,24 @@ const els = {
   browseBtn: $("#browseBtn"),
   loading: $("#loading"),
   loadingName: $("#loadingName"),
-  declined: $("#declined"),
-  declinedMsg: $("#declinedMsg"),
-  result: $("#result"),
-  liveBanner: $("#liveBanner"),
-  stopHex: $("#stopHex"),
-  stopName: $("#stopName"),
-  meaning: $("#meaning"),
-  fileMeta: $("#fileMeta"),
-  suspectH: $("#suspectH"),
-  suspectBody: $("#suspectBody"),
+  results: $("#results"),
+  overview: $("#overview"),
+  overviewHead: $("#overviewHead"),
+  overviewRecurring: $("#overviewRecurring"),
+  advAll: $("#advAll"),
   copyBtn: $("#copyBtn"),
   saveBtn: $("#saveBtn"),
   actionMsg: $("#actionMsg"),
-  reportText: $("#reportText"),
-  detailsText: $("#detailsText"),
+  cards: $("#cards"),
+  cardTemplate: $("#cardTemplate"),
 };
 
-// Parser confidence → the report's calibrated label (mirrors report.js §7.4).
-const CONFIDENCE_LABEL = {
-  "third-party-present": "medium confidence",
-  "third-party-candidates": "low confidence",
-  none: "no specific driver",
-};
-
-let currentReport = ""; // text backing Copy/Save
-let currentBaseName = "dump"; // for the download filename
+const CONF_LABEL = { high: "high", medium: "medium", low: "low", none: "none" };
 
 const extVersion = globalThis.chrome?.runtime?.getManifest?.().version ?? "1.0";
+
+// Entries for the current batch: { file, result }. Drives copy/save + the toggle.
+let entries = [];
 
 // --- ingest ----------------------------------------------------------------
 
@@ -64,9 +61,9 @@ els.drop.addEventListener("keydown", (e) => {
   }
 });
 els.fileInput.addEventListener("change", () => {
-  const file = els.fileInput.files[0];
-  els.fileInput.value = ""; // allow re-selecting the same file to re-run
-  if (file) handleFile(file);
+  const files = [...els.fileInput.files];
+  els.fileInput.value = ""; // allow re-selecting the same file(s) to re-run
+  if (files.length) handleFiles(files);
 });
 
 ["dragenter", "dragover"].forEach((evt) =>
@@ -82,129 +79,183 @@ els.fileInput.addEventListener("change", () => {
   }),
 );
 els.drop.addEventListener("drop", (e) => {
-  const file = e.dataTransfer?.files?.[0];
-  if (file) handleFile(file);
+  const files = [...(e.dataTransfer?.files ?? [])];
+  if (files.length) handleFiles(files);
 });
 
-async function handleFile(file) {
-  showOnly(els.loading);
-  els.loadingName.textContent = file.name;
+async function handleFiles(files) {
+  els.loadingName.textContent =
+    files.length === 1 ? files[0].name : `${files.length} files`;
+  showLoading();
 
-  let buffer;
+  // Parse each file independently — one bad file never blocks the rest (§7.1).
+  entries = await Promise.all(files.map(analyzeFile));
+  render();
+}
+
+async function analyzeFile(file) {
   try {
     const slice = file.slice(0, Math.min(file.size, MAX_READ_BYTES));
-    buffer = await slice.arrayBuffer();
+    const buffer = await slice.arrayBuffer();
+    const result = analyzeDump(buffer, { fileName: file.name, fileSize: file.size });
+    return { file, result };
   } catch (err) {
-    return renderDeclined(`Couldn’t read the file: ${err?.message || err}.`);
+    // Surface read/parse failures as a declined result so they get an honest row.
+    return {
+      file,
+      result: { ok: false, fileName: file.name, declined: `Couldn’t read this file: ${err?.message || err}.` },
+    };
   }
-
-  let result;
-  try {
-    result = analyzeDump(buffer, { fileName: file.name, fileSize: file.size });
-  } catch (err) {
-    // The parser is built not to throw for recognized dumps; this is a backstop.
-    return renderDeclined(`Analysis failed: ${err?.message || err}.`);
-  }
-
-  if (!result.ok) return renderDeclined(result.declined);
-  renderResult(result, file);
 }
 
 // --- rendering -------------------------------------------------------------
 
-function showOnly(el) {
-  for (const s of [els.loading, els.declined, els.result]) s.hidden = s !== el;
+function showLoading() {
+  els.loading.hidden = false;
+  els.results.hidden = true;
 }
 
-function renderDeclined(message) {
-  els.declinedMsg.textContent = message || "This file is not a Windows kernel crash dump.";
-  showOnly(els.declined);
-}
-
-function renderResult(result, file) {
-  const { header, knowledge, modules, isLive } = result;
-
-  els.liveBanner.hidden = !isLive;
-
-  els.stopHex.textContent = "0x" + (header.bugcheckCode >>> 0).toString(16).toUpperCase().padStart(8, "0");
-  els.stopName.textContent = knowledge ? knowledge.name : "(unrecognized stop code)";
-  els.meaning.textContent = isLive
-    ? "Not a crash — Windows captured a live diagnostic snapshot; the PC kept running."
-    : knowledge?.meaning
-      ? knowledge.meaning
-      : "No plain-language description is curated for this code yet — see the report below for everything extracted.";
-  els.fileMeta.textContent = `${file.name} · ${header.arch} · ${header.processorCount} core${header.processorCount === 1 ? "" : "s"} · build ${header.build}`;
-
-  els.suspectH.textContent = `Most likely source (${CONFIDENCE_LABEL[modules.confidence] || "no specific driver"})`;
-  renderSuspect(modules);
-
-  currentReport = buildReport(result, { toolVersion: extVersion, analyzedAt: Date.now() });
-  currentBaseName = file.name.replace(/\.dmp$/i, "") || "dump";
-  els.reportText.textContent = currentReport;
-  els.detailsText.textContent = buildDetails(result);
-
+function render() {
+  els.loading.hidden = true;
+  els.results.hidden = false;
   hideActionMsg();
-  showOnly(els.result);
+
+  renderOverview();
+  els.cards.replaceChildren();
+  entries.forEach((entry, i) => els.cards.append(buildCard(entry, entries.length > 1, i)));
+  applyAdvanced();
 }
 
-function renderSuspect(modules) {
-  const body = els.suspectBody;
-  body.replaceChildren();
+function renderOverview() {
+  if (entries.length < 2) {
+    els.overview.hidden = true;
+    return;
+  }
+  const s = summarizeBatch(entries);
+  const bits = [`${s.crashes} crash${s.crashes === 1 ? "" : "es"}`, `${s.liveCount} live`];
+  if (s.unreadable) bits.push(`${s.unreadable} unreadable`);
+  els.overviewHead.textContent = `${s.total} dumps analyzed — ${bits.join(", ")}`;
 
-  if (modules.suspect) {
-    const name = document.createElement("div");
-    name.className = "suspect__name";
-    const code = document.createElement("code");
-    code.textContent = modules.suspect.name;
-    name.append(code);
-    if (modules.suspect.vendor) name.append(`  ${modules.suspect.vendor}`);
-    body.append(name);
-  } else if (modules.confidence === "third-party-candidates") {
-    const lead = document.createElement("div");
-    lead.className = "suspect__name";
-    lead.textContent = "Several third-party drivers present:";
-    body.append(lead);
-    const ul = document.createElement("ul");
-    ul.className = "candidates";
-    for (const m of modules.thirdParty) {
-      const li = document.createElement("li");
-      const code = document.createElement("code");
-      code.textContent = m.name;
-      li.append(code);
-      if (m.vendor) li.append(`  ${m.vendor}`);
-      ul.append(li);
-    }
-    body.append(ul);
+  if (s.recurring) {
+    const label = s.recurring.vendor ? `${s.recurring.name} (${s.recurring.vendor})` : s.recurring.name;
+    els.overviewRecurring.textContent = `Recurring suspect: ${label} — in ${s.recurring.count} of ${s.readable}`;
+    els.overviewRecurring.hidden = false;
   } else {
-    const none = document.createElement("div");
-    none.className = "suspect__name";
-    none.textContent = "No third-party driver clearly implicated.";
-    body.append(none);
+    els.overviewRecurring.hidden = true;
+  }
+  els.overview.hidden = false;
+}
+
+function buildCard(entry, isBatch, index) {
+  const node = els.cardTemplate.content.firstElementChild.cloneNode(true);
+  const q = (sel) => node.querySelector(sel);
+  const row = rowFields(entry);
+
+  // Collapsed bar (always visible).
+  q(".filecard__name").textContent = row.fileName;
+  if (row.ok) {
+    q(".filecard__code").textContent = `${row.codeName} (${row.codeHex})`;
+    q(".filecard__suspect").textContent = row.suspect;
+    const badge = q(".badge--conf");
+    badge.textContent = CONF_LABEL[row.confidence] || row.confidence;
+    badge.classList.add(`badge--${row.confidence}`);
+  } else {
+    q(".filecard__code").textContent = "could not analyze";
+    q(".filecard__suspect").textContent = "";
+    const badge = q(".badge--conf");
+    badge.textContent = "error";
+    badge.classList.add("badge--error");
   }
 
-  const why = document.createElement("p");
-  why.className = "suspect__why";
-  why.textContent = modules.rationale;
-  body.append(why);
+  // Expand/collapse. A single file starts open; batch rows start collapsed.
+  const bar = q(".filecard__bar");
+  const body = q(".filecard__body");
+  const open = !isBatch;
+  body.hidden = !open;
+  node.classList.toggle("is-open", open);
+  bar.addEventListener("click", () => {
+    const nowOpen = body.hidden;
+    body.hidden = !nowOpen;
+    node.classList.toggle("is-open", nowOpen);
+  });
+
+  // Body.
+  if (!row.ok) {
+    const err = q(".filecard__error");
+    err.textContent = entry.result?.declined || "Unrecognized or unreadable file.";
+    err.hidden = false;
+    q(".filecard__simple").hidden = true;
+    return node;
+  }
+
+  const vm = viewModel(entry.result);
+  q(".filecard__live").hidden = !vm.isLive;
+  q(".filecard__what").textContent = vm.whatHappened;
+  q(".block__conf").textContent = `(${vm.confidenceLabel})`;
+
+  const source = q(".filecard__source");
+  for (const line of vm.sourceLines) {
+    const div = document.createElement("div");
+    div.textContent = line;
+    source.append(div);
+  }
+
+  q(".filecard__machine").textContent = vm.machine;
+
+  const fix = q(".filecard__fix");
+  for (const step of vm.fixSteps) {
+    const li = document.createElement("li");
+    li.textContent = step;
+    fix.append(li);
+  }
+
+  q(".filecard__details").textContent = buildDetails(entry.result);
+  node.dataset.index = index;
+  return node;
 }
 
-// --- delivery: copy + save -------------------------------------------------
+// Show/hide each card's Advanced expander per the batch toggle (§7.6).
+function applyAdvanced() {
+  const show = els.advAll.checked;
+  for (const adv of els.cards.querySelectorAll(".filecard__advanced")) {
+    adv.hidden = !show;
+  }
+}
+
+els.advAll.addEventListener("change", applyAdvanced);
+
+// --- delivery: combined copy + save ----------------------------------------
+
+function currentReportText() {
+  return buildBatchReport(entries, {
+    toolVersion: extVersion,
+    analyzedAt: Date.now(),
+    includeAdvanced: els.advAll.checked,
+  });
+}
+
+function downloadBaseName() {
+  if (entries.length === 1) {
+    return (entries[0].file?.name || "dump").replace(/\.dmp$/i, "") || "dump";
+  }
+  return `crash-dumps-${entries.length}`;
+}
 
 els.copyBtn.addEventListener("click", async () => {
   try {
-    await navigator.clipboard.writeText(currentReport);
+    await navigator.clipboard.writeText(currentReportText());
     showActionMsg("Copied to clipboard.", "ok");
   } catch {
-    showActionMsg("Couldn’t copy — select the report text and copy manually.", "warn");
+    showActionMsg("Couldn’t copy — open a report’s Advanced view and copy manually.", "warn");
   }
 });
 
 els.saveBtn.addEventListener("click", () => {
-  const blob = new Blob([currentReport], { type: "text/plain;charset=utf-8" });
+  const blob = new Blob([currentReportText()], { type: "text/plain;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `${currentBaseName}-analysis.txt`;
+  a.download = `${downloadBaseName()}-analysis.txt`;
   document.body.append(a);
   a.click();
   a.remove();
