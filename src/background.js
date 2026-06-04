@@ -22,6 +22,8 @@ import {
   parseEventAlarmName,
   parseTimeOfDay,
   tabIdFromAlarmName,
+  ANALYZER_COMMAND,
+  ANALYZER_PAGE,
   ANCHORS,
   ANCHOR_IN,
   ANCHOR_OUT,
@@ -803,6 +805,32 @@ async function jumpToUrl(url) {
   }
 }
 
+/**
+ * Open the DMP analyzer ready-to-upload, or focus it if already open (DMP §7.8).
+ * Find-and-focus uses the existing `tabs` permission — no new perms. We can't
+ * guarantee the OS file dialog auto-opens (the command's user activation doesn't
+ * carry across the tab open), so we land the user on the page with the upload
+ * control focused; an `?focus=1` hint tells the page to do that and, when it's
+ * already the active tab, to invoke the picker directly.
+ */
+async function openAnalyzer() {
+  const base = chrome.runtime.getURL(ANALYZER_PAGE);
+  const all = await chrome.tabs.query({});
+  const matches = all.filter((t) => typeof t.url === "string" && t.url.startsWith(base));
+  if (matches.length > 0) {
+    matches.sort((a, b) => (b.lastAccessed ?? 0) - (a.lastAccessed ?? 0));
+    const target = matches[0];
+    if (target.id != null) {
+      await chrome.tabs.update(target.id, { active: true });
+      // Nudge an already-open analyzer to focus its upload control / picker.
+      chrome.tabs.sendMessage(target.id, { type: "analyzer:focus-upload" }).catch(() => {});
+    }
+    await chrome.windows.update(target.windowId, { focused: true }).catch(() => {});
+  } else {
+    await chrome.tabs.create({ url: `${base}?focus=1` });
+  }
+}
+
 /** Defer a fired anchor's reminder by the configured N minutes (EV-13a). */
 async function snoozeEvent(url, eventId, anchor) {
   const minutes = clampSnooze(await getSnoozeMinutes());
@@ -1294,6 +1322,10 @@ chrome.commands.onCommand.addListener(async (command) => {
     const result = await toggleEventsTab();
     if (!result.ok || result.confirm) return; // confirm path shows its own prompt
     await flashBadge(result.added ? "+EV" : "−EV", result.added ? "#16a34a" : "#6b7280");
+    return;
+  }
+  if (command === ANALYZER_COMMAND) {
+    await openAnalyzer(); // DMP §7.8
   }
 });
 

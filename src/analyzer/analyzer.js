@@ -83,6 +83,42 @@ els.drop.addEventListener("drop", (e) => {
   if (files.length) handleFiles(files);
 });
 
+// --- quick-upload focus (DMP §7.8) -----------------------------------------
+// The Alt+Shift+D command lands the user ready to upload. We can't guarantee the
+// OS file dialog auto-opens (the command's user activation doesn't reliably carry
+// across the tab open), so we focus + highlight the drop zone — the next
+// Enter/Space/click starts the pick. The drop zone is role="button", tabindex=0.
+
+function focusUpload() {
+  els.drop.classList.add("is-drag"); // reuse the highlight style as an attract cue
+  els.drop.focus({ preventScroll: false });
+  els.drop.scrollIntoView({ block: "center", behavior: "smooth" });
+  // Fade the cue so it reads as a hint, not a stuck drag state.
+  setTimeout(() => els.drop.classList.remove("is-drag"), 1500);
+}
+
+// Background opens new analyzer tabs with ?focus=1 (it can't message a tab that
+// isn't loaded yet); an already-open tab is nudged via a runtime message.
+if (new URLSearchParams(location.search).get("focus") === "1") {
+  // Defer to after first paint so the element is focusable and scrolled into view.
+  requestAnimationFrame(focusUpload);
+  // Tidy the URL so a reload/bookmark doesn't keep re-triggering the cue.
+  history.replaceState(null, "", location.pathname);
+}
+
+chrome.runtime?.onMessage?.addListener((msg) => {
+  if (msg?.type === "analyzer:focus-upload") {
+    // Already the active tab: try the picker directly (still subject to the
+    // browser's user-activation rules), then fall back to focusing the control.
+    try {
+      els.fileInput.click();
+    } catch {
+      /* activation may be unavailable; focus is the guaranteed-safe fallback */
+    }
+    focusUpload();
+  }
+});
+
 async function handleFiles(files) {
   els.loadingName.textContent =
     files.length === 1 ? files[0].name : `${files.length} files`;

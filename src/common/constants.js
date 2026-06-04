@@ -24,6 +24,10 @@ export const LAST_USED_INTERVAL_KEY = "lastUsedIntervalMinutes"; // chrome.stora
 // Command names (manifest `commands`).
 export const RELOAD_COMMAND = "toggle-current-tab";
 export const EVENTS_COMMAND = "toggle-events-tab"; // EV-10
+export const ANALYZER_COMMAND = "open-dmp-analyzer"; // DMP §7.8 (Alt+Shift+D)
+
+/** Extension-relative path to the DMP analyzer page (DMP §7.8). */
+export const ANALYZER_PAGE = "src/analyzer/analyzer.html";
 
 export const ALARM_PREFIX = "reload-tab-";
 
