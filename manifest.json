@@ -38,12 +38,6 @@
         "default": "Alt+Shift+E"
       },
       "description": "Add or remove the current tab as an events tab"
-    },
-    "open-dmp-analyzer": {
-      "suggested_key": {
-        "default": "Alt+Shift+D"
-      },
-      "description": "Open the crash dump (.dmp) analyzer, ready to upload"
     }
   },
   "permissions": [

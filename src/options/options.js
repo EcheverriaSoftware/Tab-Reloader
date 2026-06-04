@@ -1,5 +1,4 @@
 import {
-  ANALYZER_PAGE,
   MAX_INTERVAL_MINUTES,
   MIN_INTERVAL_MINUTES,
   clampInterval,
@@ -71,7 +70,7 @@ $("#shortcutsBtn").addEventListener("click", () => {
 });
 
 $("#analyzerBtn").addEventListener("click", () => {
-  chrome.tabs.create({ url: chrome.runtime.getURL(ANALYZER_PAGE) });
+  chrome.tabs.create({ url: chrome.runtime.getURL("src/analyzer/analyzer.html") });
 });
 
 async function showShortcut() {
@@ -79,14 +78,10 @@ async function showShortcut() {
     const cmds = await chrome.commands.getAll();
     const reload = cmds.find((c) => c.name === "toggle-current-tab");
     const events = cmds.find((c) => c.name === "toggle-events-tab");
-    const analyzer = cmds.find((c) => c.name === "open-dmp-analyzer");
     $("#shortcut").textContent = reload?.shortcut || "(unset)";
     const ev = events?.shortcut || "(unset)";
     $("#eventShortcut").textContent = ev;
     $("#eventShortcut2").textContent = ev;
-    const dmp = analyzer?.shortcut || "(unset)";
-    $("#analyzerShortcut").textContent = dmp;
-    $("#analyzerShortcut2").textContent = dmp;
   } catch {
     /* ignore */
   }

@@ -1,5 +1,4 @@
 import {
-  ANALYZER_PAGE,
   DEFAULT_INTERVAL_MINUTES,
   FIRE_STATUS,
   clampInterval,
@@ -140,7 +139,7 @@ async function refresh() {
 $("#optionsBtn").addEventListener("click", () => chrome.runtime.openOptionsPage());
 
 $("#analyzerBtn").addEventListener("click", () => {
-  chrome.tabs.create({ url: chrome.runtime.getURL(ANALYZER_PAGE) });
+  chrome.tabs.create({ url: chrome.runtime.getURL("src/analyzer/analyzer.html") });
   window.close();
 });
 
@@ -565,18 +564,6 @@ async function showShortcut() {
   }
 }
 
-async function showAnalyzerShortcut() {
-  try {
-    const cmds = await chrome.commands.getAll();
-    const cmd = cmds.find((c) => c.name === "open-dmp-analyzer");
-    const el = $("#analyzerShortcutHint");
-    if (cmd && cmd.shortcut) el.textContent = cmd.shortcut;
-    else el.hidden = true; // no binding → drop the "or <key>" hint entirely
-  } catch {
-    /* commands may be unavailable in some Chromium forks */
-  }
-}
-
 // Re-render live when event data changes from another context (a fire in the
 // worker, or edits on the options page) — EV-16 / §9.6.
 chrome.storage.onChanged.addListener((_changes, area) => {
@@ -606,9 +593,7 @@ async function init() {
   // Show the configured min/max in placeholders for clarity.
   $("#currentInterval").placeholder = String(DEFAULT_INTERVAL_MINUTES);
   buildDayButtons();
-  // EV-24: opening the popup acknowledges any outstanding fires.
-  await send("popupOpened").catch(() => {});
-  await Promise.all([refresh(), refreshEvents(), showShortcut(), showEventShortcut(), showAnalyzerShortcut()]);
+  await Promise.all([refresh(), refreshEvents(), showShortcut(), showEventShortcut()]);
   tickTimer = setInterval(tick, 1000);
 }
 
