@@ -61,21 +61,41 @@
         <h2 class="listsection__title">Events <span id="eventCount" class="badge" hidden>0</span></h2>
       </div>
 
-      <!-- Not a usable tab -->
-      <div id="eventNoTab" class="empty" hidden>
-        <p>Open a web page to attach time-of-day reminders to it.</p>
+      <!-- EV-21: persistent banner when OS notifications are denied -->
+      <div id="permBanner" class="banner banner--warn" hidden>
+        <span>OS notifications are off — your alerts won't appear.</span>
+        <button id="permBannerBtn" class="linkbtn">Open settings</button>
       </div>
 
-      <!-- Not yet registered -->
-      <div id="eventReg" class="evreg" hidden>
-        <button id="eventRegBtn" class="btn btn--block">Add events to this tab</button>
-        <p class="empty__hint">
-          or press <kbd id="eventShortcutHint">Alt+Shift+E</kbd> on any tab.
+      <!-- Pane A — Your event tabs (global roster — EV-19). Always shown. -->
+      <div class="rosterpane">
+        <h3 class="rosterpane__title">Your event tabs</h3>
+        <ul id="rosterList" class="rosterlist"></ul>
+        <p id="rosterEmpty" class="empty__hint" hidden>
+          No event tabs yet. Open a page and press
+          <kbd id="eventShortcutHintTop">Alt+Shift+E</kbd>.
         </p>
       </div>
 
-      <!-- Registered: events for the current tab -->
-      <div id="eventPanel" hidden>
+      <!-- Pane B — This tab (current-tab editor). Always shown. -->
+      <div class="thistabpane">
+        <h3 class="rosterpane__title">This tab</h3>
+
+        <!-- Not a usable tab -->
+        <div id="eventNoTab" class="empty" hidden>
+          <p>Open a web page to attach reminders to it.</p>
+        </div>
+
+        <!-- Not yet registered: collapsed register button -->
+        <div id="eventReg" class="evreg" hidden>
+          <button id="eventRegBtn" class="btn btn--block">Add events to this tab</button>
+          <p class="empty__hint">
+            or press <kbd id="eventShortcutHint">Alt+Shift+E</kbd> on any tab.
+          </p>
+        </div>
+
+        <!-- Registered: editor for the current tab -->
+        <div id="eventPanel" hidden>
         <ul id="eventList" class="evlist"></ul>
         <p id="eventEmpty" class="empty__hint" hidden>No events yet — add one below.</p>
 
@@ -117,6 +137,17 @@
             <button id="eventUnregNo" class="linkbtn">Cancel</button>
           </span>
         </div>
+        </div><!-- /#eventPanel -->
+      </div><!-- /.thistabpane -->
+
+      <!-- EV-23 Recent activity + EV-22 Test notification -->
+      <div class="activitypane">
+        <div class="activitypane__head">
+          <h3 class="rosterpane__title">Recent activity</h3>
+          <button id="testNotifBtn" class="linkbtn">Send test notification</button>
+        </div>
+        <ul id="fireLogList" class="firelog"></ul>
+        <p id="fireLogEmpty" class="empty__hint" hidden>No fires in the last 24 hours.</p>
       </div>
     </section>
 
@@ -125,6 +156,27 @@
       <button id="analyzerBtn" class="linkbtn">Analyze a crash dump (.dmp)…</button>
       <span class="popupfoot__hint">or <kbd id="analyzerShortcutHint">Alt+Shift+D</kbd></span>
     </footer>
+
+    <!-- Roster row template (EV-19) -->
+    <template id="rosterRowTemplate">
+      <li class="rosterrow">
+        <img class="favicon" src="" alt="" />
+        <div class="rosterrow__meta">
+          <div class="rosterrow__title"></div>
+          <div class="rosterrow__sub"></div>
+        </div>
+        <span class="rosterrow__count"></span>
+      </li>
+    </template>
+
+    <!-- Fire-log row template (EV-23) -->
+    <template id="fireLogRowTemplate">
+      <li class="firerow">
+        <span class="firerow__time"></span>
+        <span class="firerow__label"></span>
+        <span class="firerow__status"></span>
+      </li>
+    </template>
 
     <!-- Event row template -->
     <template id="eventRowTemplate">

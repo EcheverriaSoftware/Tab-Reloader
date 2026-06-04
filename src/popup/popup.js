@@ -1,10 +1,12 @@
 import {
   ANALYZER_PAGE,
   DEFAULT_INTERVAL_MINUTES,
+  FIRE_STATUS,
   clampInterval,
   eventScheduleText,
   eventTimesText,
   formatTimeOfDay,
+  relativeDay,
 } from "../common/constants.js";
 
 const $ = (sel) => document.querySelector(sel);
@@ -241,7 +243,78 @@ function renderEventList() {
   $("#eventEmpty").hidden = eventsState.events.length > 0;
 }
 
+// --- EV-21 permission banner ---
+function renderPermBanner() {
+  const banner = $("#permBanner");
+  banner.hidden = eventsState.permLevel !== "denied";
+}
+
+// --- EV-19 global roster ---
+function rosterNextText(next) {
+  if (!next) return "no upcoming firings";
+  const action = next.anchor === "in" ? "clock in" : "clock out";
+  return `next: ${relativeDay(next.at)} ${formatTimeOfDay(next.time)} — ${action}`;
+}
+
+function renderRoster() {
+  const list = $("#rosterList");
+  const tpl = $("#rosterRowTemplate");
+  list.textContent = "";
+  for (const t of eventsState.roster || []) {
+    const node = tpl.content.firstElementChild.cloneNode(true);
+    node.dataset.url = t.url;
+    node.classList.toggle("rosterrow--open", t.isOpen);
+    const fav = node.querySelector(".favicon");
+    fav.src = t.favIconUrl || "";
+    fav.style.visibility = t.favIconUrl ? "visible" : "hidden";
+    node.querySelector(".rosterrow__title").textContent = t.title;
+    node.querySelector(".rosterrow__sub").textContent = rosterNextText(t.next);
+    const count = node.querySelector(".rosterrow__count");
+    count.textContent = `${t.eventCount} event${t.eventCount === 1 ? "" : "s"}`;
+    list.appendChild(node);
+  }
+  $("#rosterEmpty").hidden = (eventsState.roster?.length || 0) > 0;
+}
+
+// --- EV-23 recent activity ---
+function statusText(s) {
+  switch (s) {
+    case FIRE_STATUS.DELIVERED: return "delivered";
+    case FIRE_STATUS.MUTED_PERM: return "muted by OS";
+    case FIRE_STATUS.CREATE_FAILED: return "failed";
+    case FIRE_STATUS.WORKER_ERROR: return "worker error";
+    case FIRE_STATUS.PENDING: return "pending";
+    default: return s || "?";
+  }
+}
+
+function renderFireLog() {
+  const list = $("#fireLogList");
+  const tpl = $("#fireLogRowTemplate");
+  list.textContent = "";
+  const log = eventsState.fireLog || [];
+  for (const entry of log) {
+    const node = tpl.content.firstElementChild.cloneNode(true);
+    const t = new Date(entry.ts);
+    node.querySelector(".firerow__time").textContent =
+      t.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    const action = entry.anchor === "in" ? "clock in" : "clock out";
+    const label = entry.label || action;
+    const tag = entry.test ? " (test)" : entry.snooze ? " (snooze)" : "";
+    node.querySelector(".firerow__label").textContent = `${label} · ${action}${tag}`;
+    const status = node.querySelector(".firerow__status");
+    status.textContent = statusText(entry.status);
+    status.classList.add(`firerow__status--${entry.status || "unknown"}`);
+    list.appendChild(node);
+  }
+  $("#fireLogEmpty").hidden = log.length > 0;
+}
+
 function renderEvents() {
+  renderPermBanner();
+  renderRoster();
+  renderFireLog();
+
   const cur = eventsState?.current;
   const noTab = $("#eventNoTab");
   const reg = $("#eventReg");
@@ -510,10 +583,31 @@ chrome.storage.onChanged.addListener((_changes, area) => {
   if (area === "sync" || area === "local") refreshEvents();
 });
 
+// EV-19: roster row click jumps to that event tab.
+$("#rosterList").addEventListener("click", async (e) => {
+  const row = e.target.closest(".rosterrow");
+  if (!row) return;
+  await send("jumpToEventTab", { url: row.dataset.url });
+});
+
+// EV-22: fire a test alert through the same path as a real fire, then refresh
+// so the user sees it appear in Recent activity.
+$("#testNotifBtn").addEventListener("click", async () => {
+  await send("sendTestNotification");
+  await refreshEvents();
+});
+
+// EV-21: jump to Chrome's site/notification settings so the user can re-grant.
+$("#permBannerBtn").addEventListener("click", () => {
+  chrome.tabs.create({ url: "chrome://settings/content/notifications" });
+});
+
 async function init() {
   // Show the configured min/max in placeholders for clarity.
   $("#currentInterval").placeholder = String(DEFAULT_INTERVAL_MINUTES);
   buildDayButtons();
+  // EV-24: opening the popup acknowledges any outstanding fires.
+  await send("popupOpened").catch(() => {});
   await Promise.all([refresh(), refreshEvents(), showShortcut(), showEventShortcut(), showAnalyzerShortcut()]);
   tickTimer = setInterval(tick, 1000);
 }

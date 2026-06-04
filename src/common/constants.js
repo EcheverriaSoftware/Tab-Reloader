@@ -84,6 +84,29 @@ export const DEFAULT_SNOOZE_MINUTES = 5;
 export const MIN_SNOOZE_MINUTES = 1;
 export const MAX_SNOOZE_MINUTES = 120;
 
+// Fire log + unacknowledged firings (EV-23, EV-24). Both live in
+// chrome.storage.local — per-device observability, never synced.
+export const FIRE_LOG_KEY = "fireLog";
+export const UNACKED_KEY = "unackedFirings";
+export const FIRE_LOG_MAX = 50; // ring buffer cap (§9.5)
+export const FIRE_LOG_DISPLAY_MAX = 20; // popup "Recent activity" cap (EV-23)
+export const FIRE_LOG_TTL_MS = 24 * 60 * 60 * 1000; // 24h
+export const UNACK_ALARM_PREFIX = "unack-";
+export const UNACK_WINDOW_MINUTES = 0.5; // 30s, clamped by Chrome to ≥30s (EV-24)
+
+// Fire-log status values (§9.5).
+export const FIRE_STATUS = Object.freeze({
+  PENDING: "pending",
+  DELIVERED: "delivered",
+  MUTED_PERM: "muted-perm",
+  CREATE_FAILED: "create-failed",
+  WORKER_ERROR: "worker-error",
+});
+
+export function isUnackAlarmName(name) {
+  return !!name && name.startsWith(UNACK_ALARM_PREFIX);
+}
+
 const DAY_ABBR = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 // An event has two independently-scheduled anchors (§5, §9.4).
@@ -225,23 +248,37 @@ export function eventTimesText(ev) {
 }
 
 /**
- * One-line schedule summary for an event view in a list row (§8.1): the times
- * (when a label takes the title slot), recurrence, and either its state or the
- * next imminent anchor.
+ * Per-anchor armed-state text for a row (EV-20). Returns one of:
+ *   "next today" / "next Mon" / "missed" / "fired" / "—".
+ * The whole-event state ("disabled") is handled by `eventScheduleText` so a
+ * row only shows it once instead of repeating it per anchor.
+ */
+export function anchorStateBrief(ev, anchor) {
+  const missed = ev.missed || {};
+  const lastFired = ev.lastFiredAt || {};
+  const scheduled = ev.scheduledFor || {};
+  if (missed[anchor]) return "missed";
+  if (ev.oneTime && lastFired[anchor] != null) return "fired";
+  const t = scheduled[anchor];
+  if (t == null) return "—";
+  return `next ${relativeDay(t)}`;
+}
+
+/**
+ * One-line schedule summary for an event view in a list row (§8.1, EV-20):
+ * the times (when a label takes the title slot), recurrence, then the
+ * **per-anchor armed state** so the user can verify at a glance that each
+ * anchor is actually scheduled.
  */
 export function eventScheduleText(ev) {
   const bits = [];
   if (ev.label) bits.push(eventTimesText(ev)); // else the times are the title
   bits.push(ev.oneTime ? "Once" : daysSummary(ev.days));
-  const missed = ev.missed || {};
   if (!ev.enabled) {
-    if (ev.oneTime && (missed.in || missed.out)) {
-      bits.push(missed.in && missed.out ? "missed" : `missed ${missed.in ? "in" : "out"}`);
-    } else {
-      bits.push("disabled");
-    }
-  } else if (ev.nextFireAt && ev.nextFireAnchor) {
-    bits.push(`next ${ev.nextFireAnchor} ${relativeDay(ev.nextFireAt)}`);
+    bits.push("disabled");
+  } else {
+    bits.push(`out: ${anchorStateBrief(ev, "out")}`);
+    bits.push(`in: ${anchorStateBrief(ev, "in")}`);
   }
   return bits.filter(Boolean).join(" · ");
 }
