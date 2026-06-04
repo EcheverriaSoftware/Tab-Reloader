@@ -10,9 +10,6 @@ import {
   DEFAULT_INTERVAL_MINUTES,
   DEFAULT_SNOOZE_MINUTES,
   EVENT_TAB_PREFIX,
-  FIRE_LOG_KEY,
-  FIRE_LOG_MAX,
-  FIRE_LOG_TTL_MS,
   KEEP_ALERTS_KEY,
   LAST_USED_INTERVAL_KEY,
   NOTIF_MAP_KEY,
@@ -20,7 +17,6 @@ import {
   SHOW_BADGE_KEY,
   SNOOZE_MAP_KEY,
   SNOOZE_MINUTES_KEY,
-  UNACKED_KEY,
 } from "./constants.js";
 
 // ---------------------------------------------------------------------------
@@ -216,63 +212,6 @@ export async function getSnooze(alarmName) {
 }
 export async function deleteSnooze(alarmName) {
   await deleteSessionMapEntry(SNOOZE_MAP_KEY, alarmName);
-}
-
-// ---------------------------------------------------------------------------
-// Fire log + unacknowledged firings (EV-23, EV-24). Per-device observability
-// in chrome.storage.local — explicitly NOT synced. The fire log is a ring
-// buffer (max FIRE_LOG_MAX entries) trimmed to FIRE_LOG_TTL_MS on every write.
-// ---------------------------------------------------------------------------
-
-export async function getFireLog() {
-  const r = await chrome.storage.local.get(FIRE_LOG_KEY).catch(() => ({}));
-  return Array.isArray(r[FIRE_LOG_KEY]) ? r[FIRE_LOG_KEY] : [];
-}
-
-/** Trim a log array: drop entries older than the TTL and cap to the ring size. */
-function trimFireLog(log) {
-  const cutoff = Date.now() - FIRE_LOG_TTL_MS;
-  const fresh = log.filter((e) => e && typeof e.ts === "number" && e.ts >= cutoff);
-  return fresh.length > FIRE_LOG_MAX ? fresh.slice(-FIRE_LOG_MAX) : fresh;
-}
-
-export async function appendFireLog(entry) {
-  const log = await getFireLog();
-  log.push(entry);
-  await chrome.storage.local.set({ [FIRE_LOG_KEY]: trimFireLog(log) });
-}
-
-/** Update an in-flight entry by `id` (used for the pending→delivered transition). */
-export async function updateFireLog(id, patch) {
-  const log = await getFireLog();
-  const idx = log.findIndex((e) => e?.id === id);
-  if (idx === -1) return;
-  log[idx] = { ...log[idx], ...patch };
-  await chrome.storage.local.set({ [FIRE_LOG_KEY]: trimFireLog(log) });
-}
-
-export async function getUnackedFirings() {
-  const r = await chrome.storage.local.get(UNACKED_KEY).catch(() => ({}));
-  return Array.isArray(r[UNACKED_KEY]) ? r[UNACKED_KEY] : [];
-}
-
-export async function addUnackedFiring(entry) {
-  const list = await getUnackedFirings();
-  if (list.some((e) => e.notifId === entry.notifId)) return; // de-dupe
-  list.push(entry);
-  await chrome.storage.local.set({ [UNACKED_KEY]: list });
-}
-
-export async function removeUnackedFiring(notifId) {
-  const list = await getUnackedFirings();
-  const next = list.filter((e) => e.notifId !== notifId);
-  if (next.length !== list.length) {
-    await chrome.storage.local.set({ [UNACKED_KEY]: next });
-  }
-}
-
-export async function clearUnackedFirings() {
-  await chrome.storage.local.set({ [UNACKED_KEY]: [] });
 }
 
 // ---------------------------------------------------------------------------

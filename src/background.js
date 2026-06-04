@@ -17,7 +17,6 @@ import {
   formatTimeOfDay,
   genId,
   isSnoozeAlarmName,
-  isUnackAlarmName,
   normalizeDays,
   parseEventAlarmName,
   parseTimeOfDay,
@@ -31,19 +30,11 @@ import {
   DEFAULT_INTERVAL_KEY,
   EVENTS_COMMAND,
   EVENT_NOTIF_PREFIX,
-  FIRE_LOG_DISPLAY_MAX,
-  FIRE_LOG_TTL_MS,
-  FIRE_STATUS,
   RELOAD_COMMAND,
   SHOW_BADGE_KEY,
   SNOOZE_ALARM_PREFIX,
-  UNACK_ALARM_PREFIX,
-  UNACK_WINDOW_MINUTES,
 } from "./common/constants.js";
 import {
-  addUnackedFiring,
-  appendFireLog,
-  clearUnackedFirings,
   deleteEntry,
   deleteEventTab,
   deleteNotif,
@@ -52,21 +43,17 @@ import {
   getEntry,
   getEventTab,
   getEventTabs,
-  getFireLog,
   getKeepAlertsOnScreen,
   getList,
   getNotif,
   getShowBadge,
   getSnooze,
   getSnoozeMinutes,
-  getUnackedFirings,
   putEntry,
   putEventTab,
   putNotif,
   putSnooze,
-  removeUnackedFiring,
   setLastUsedInterval,
-  updateFireLog,
 } from "./common/storage.js";
 
 const BADGE_COLOR = "#2563eb";
@@ -222,52 +209,16 @@ async function isUserViewingTab(tabId, tabHint) {
 // Badge
 // ---------------------------------------------------------------------------
 
-// Badge state colors. Unacked + muted are always shown (they're failure
-// surfaces — §8.4 highest precedence); the "normal" count respects showBadge.
-const BADGE_UNACK_COLOR = "#dc2626"; // red — EV-24
-const BADGE_MUTED_COLOR = "#6b7280"; // gray — EV-21
-const BADGE_EVENTS_COLOR = "#16a34a"; // green — events tab count
-
-/**
- * Resolve the badge's current state with the §8.4 precedence:
- *   unacked-fires  >  OS-notifications-denied  >  reload-count  >  event-tabs-count.
- * The first two ignore showBadge — they are observability surfaces the user
- * has not opted out of in the same way as the simple count.
- */
 async function refreshBadge() {
-  // 1. EV-24 — unacknowledged fires (always surfaced).
-  const unacked = await getUnackedFirings();
-  if (unacked.length > 0) {
-    await chrome.action.setBadgeBackgroundColor({ color: BADGE_UNACK_COLOR });
-    await chrome.action.setBadgeText({ text: String(unacked.length) });
-    return;
-  }
-  // 2. EV-21 — OS notifications denied (always surfaced).
-  const permLevel = await getNotificationPermLevel();
-  if (permLevel === "denied") {
-    await chrome.action.setBadgeBackgroundColor({ color: BADGE_MUTED_COLOR });
-    await chrome.action.setBadgeText({ text: "!" });
-    return;
-  }
-  // 3 + 4 — counts only if the user opted in.
   const show = await getShowBadge();
   if (!show) {
     await chrome.action.setBadgeText({ text: "" });
     return;
   }
-  const reloadCount = Object.keys(await getList()).length;
-  if (reloadCount > 0) {
-    await chrome.action.setBadgeBackgroundColor({ color: BADGE_COLOR });
-    await chrome.action.setBadgeText({ text: String(reloadCount) });
-    return;
-  }
-  const eventTabCount = Object.keys(await getEventTabs()).length;
-  if (eventTabCount > 0) {
-    await chrome.action.setBadgeBackgroundColor({ color: BADGE_EVENTS_COLOR });
-    await chrome.action.setBadgeText({ text: String(eventTabCount) });
-    return;
-  }
-  await chrome.action.setBadgeText({ text: "" });
+  const list = await getList();
+  const count = Object.keys(list).length;
+  await chrome.action.setBadgeBackgroundColor({ color: BADGE_COLOR });
+  await chrome.action.setBadgeText({ text: count > 0 ? String(count) : "" });
 }
 
 /** Briefly flash a confirmation on the toolbar badge, then restore (7.1). */
@@ -498,7 +449,6 @@ async function registerEventTab(tab) {
     addedAt: Date.now(),
     events: [],
   });
-  await refreshBadge(); // §8.4 normal-state count changed
   return { ok: true, url: tab.url };
 }
 
@@ -509,7 +459,6 @@ async function unregisterEventTab(url) {
     for (const ev of record.events) await disarmEvent(ev.id);
   }
   await deleteEventTab(url);
-  await refreshBadge();
   return { ok: true };
 }
 
@@ -646,131 +595,26 @@ async function toggleEventsTab() {
   return { ok: true, added: false };
 }
 
-// --- firing & notifications (EV-11..EV-15, EV-21..EV-24) -------------------
+// --- firing & notifications (EV-11..EV-15) ---------------------------------
 
-/** Wrap the callback-style getPermissionLevel; defaults to 'granted' on error. */
-function getNotificationPermLevel() {
-  return new Promise((resolve) => {
-    try {
-      chrome.notifications.getPermissionLevel((lvl) => resolve(lvl || "granted"));
-    } catch {
-      resolve("granted");
-    }
-  });
-}
-
-/**
- * Fire one anchor's notification through the same path used for real fires,
- * tests, and snoozes. Implements EV-21 (skip when OS perm is denied),
- * EV-23 (pending→delivered/muted-perm/create-failed fire-log entries), and
- * EV-24 (schedule a 30s unack alarm on delivery). Returns the notif id on
- * delivery, or null when skipped/failed.
- *
- * `opts`:
- *   - test:  marks the fire-log entry as a test (EV-22)
- *   - snooze: marks the entry as a snooze re-fire (so the log distinguishes it)
- */
-async function showEventNotification(url, record, event, anchor, opts = {}) {
-  const logId = `flog-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-  const when = formatTimeOfDay(anchorTime(event, anchor));
-  const baseEntry = {
-    id: logId,
-    ts: Date.now(),
-    eventId: event.id,
-    anchor,
-    label: event.label || when,
-    time: anchorTime(event, anchor),
-    tabTitle: record.title || url,
-    test: !!opts.test,
-    snooze: !!opts.snooze,
-    status: FIRE_STATUS.PENDING,
-  };
-  await appendFireLog(baseEntry);
-
-  // EV-21: skip create when the OS has denied notifications. The badge's
-  // muted state surfaces the condition; refreshBadge runs below.
-  const permLevel = await getNotificationPermLevel();
-  if (permLevel === "denied") {
-    await updateFireLog(logId, { status: FIRE_STATUS.MUTED_PERM });
-    await refreshBadge();
-    return null;
-  }
-
+/** Show the alert for a firing anchor and record the notif→{event,anchor} map. */
+async function showEventNotification(url, record, event, anchor) {
   const keep = await getKeepAlertsOnScreen();
   const notifId = `${EVENT_NOTIF_PREFIX}${event.id}:${anchor}:${Date.now()}`;
-  await putNotif(notifId, { kind: "event", url, eventId: event.id, anchor, logId });
+  await putNotif(notifId, { kind: "event", url, eventId: event.id, anchor });
+  const when = formatTimeOfDay(anchorTime(event, anchor));
   const action = anchorActionLabel(anchor); // "Clock in" or "Clock out"
-  const titlePrefix = opts.test ? "[Test] " : "";
-  const title = event.label
-    ? `${titlePrefix}${action} — ${event.label}`
-    : `${titlePrefix}${action} at ${when}`;
-
-  try {
-    await chrome.notifications.create(notifId, {
-      type: "basic",
-      iconUrl: chrome.runtime.getURL("icons/icon128.png"),
-      title,
-      message: `${record.title || url}\n${when}`,
-      buttons: [{ title: "Jump to tab" }, { title: "Snooze" }],
-      silent: true, // §8.3 — visual only
-      requireInteraction: keep, // §8.2 keepAlertsOnScreen
-      priority: keep ? 2 : 0,
-    });
-    await updateFireLog(logId, { status: FIRE_STATUS.DELIVERED });
-    // EV-24: schedule an unack alarm; user interaction clears it below.
-    await chrome.alarms.create(`${UNACK_ALARM_PREFIX}${notifId}`, {
-      delayInMinutes: UNACK_WINDOW_MINUTES,
-    });
-    return notifId;
-  } catch (e) {
-    await updateFireLog(logId, {
-      status: FIRE_STATUS.CREATE_FAILED,
-      error: String(e?.message || e),
-    });
-    await deleteNotif(notifId);
-    await refreshBadge();
-    return null;
-  }
-}
-
-/** Drop the unack alarm + unacked entry for a notif the user just handled. */
-async function clearUnackFor(notifId) {
-  await chrome.alarms.clear(`${UNACK_ALARM_PREFIX}${notifId}`);
-  await removeUnackedFiring(notifId);
-  await refreshBadge();
-}
-
-/** Unack alarm elapsed → if the notif is still pending in the session, record it. */
-async function handleUnackFire(notifId) {
-  const info = await getNotif(notifId);
-  if (!info) return; // already acked: notif map entry was deleted
-  if (info.kind !== "event") return; // confirm/unrelated → ignore
-  await addUnackedFiring({
-    notifId,
-    eventId: info.eventId,
-    anchor: info.anchor,
-    ts: Date.now(),
+  const title = event.label ? `${action} — ${event.label}` : `${action} at ${when}`;
+  await chrome.notifications.create(notifId, {
+    type: "basic",
+    iconUrl: chrome.runtime.getURL("icons/icon128.png"),
+    title,
+    message: `${record.title || url}\n${when}`,
+    buttons: [{ title: "Jump to tab" }, { title: "Snooze" }],
+    silent: true, // §8.3 — visual only
+    requireInteraction: keep, // §8.2 keepAlertsOnScreen
+    priority: keep ? 2 : 0,
   });
-  await refreshBadge();
-}
-
-/** EV-22: fire a sample alert through the production path against the current tab. */
-async function sendTestNotification() {
-  const tab = await getCurrentTab();
-  const url = tab?.url || "about:blank";
-  const record = { title: tab?.title || "Test", url };
-  const now = new Date();
-  const hh = String(now.getHours()).padStart(2, "0");
-  const mm = String(now.getMinutes()).padStart(2, "0");
-  const synthetic = {
-    id: `test-${Date.now()}`,
-    label: "Test notification",
-    clockInTime: `${hh}:${mm}`,
-    clockOutTime: `${hh}:${mm}`,
-  };
-  const notifId = await showEventNotification(url, record, synthetic, ANCHOR_IN, { test: true });
-  const permLevel = await getNotificationPermLevel();
-  return { ok: true, delivered: notifId != null, permLevel };
 }
 
 /** Confirming notification for shortcut-driven unregister (EV-2a, §9.5). */
@@ -873,35 +717,21 @@ async function fireSnooze(alarmName) {
   if (!info) return;
   const located = await findEvent(info.eventId);
   if (located) {
-    await showEventNotification(
-      located.url,
-      located.record,
-      located.event,
-      info.anchor || ANCHOR_IN,
-      { snooze: true },
-    );
+    await showEventNotification(located.url, located.record, located.event, info.anchor || ANCHOR_IN);
   }
 }
 
 // --- reconciliation on startup / install (§9.6, EV-16, EV-18) --------------
 
 async function reconcileEvents() {
-  // Drop every event, snooze, and unack alarm, then re-arm enabled anchors
-  // from scratch. Snoozes and unack timers are intentionally not restored
-  // (EV-13a, EV-18, EV-24 — the unack window is a per-fire follow-up only).
+  // Drop every event & snooze alarm, then re-arm enabled anchors from scratch.
+  // Snoozes are intentionally not restored (EV-13a, EV-18).
   const alarms = await chrome.alarms.getAll();
   await Promise.all(
     alarms
-      .filter(
-        (a) =>
-          parseEventAlarmName(a.name) !== null ||
-          isSnoozeAlarmName(a.name) ||
-          isUnackAlarmName(a.name),
-      )
+      .filter((a) => parseEventAlarmName(a.name) !== null || isSnoozeAlarmName(a.name))
       .map((a) => chrome.alarms.clear(a.name)),
   );
-  // Unacked-firings list is also a per-session signal — drop it on launch.
-  await clearUnackedFirings();
 
   const now = Date.now();
   const tabs = await getEventTabs();
@@ -1018,48 +848,7 @@ async function toEventView(event) {
   };
 }
 
-/**
- * Earliest upcoming firing across all of a tab's events — drives the global
- * roster's "next: today 12:00 — clock out" sub-line (EV-19).
- */
-function tabNextFiring(events) {
-  let best = null;
-  for (const ev of events) {
-    if (!ev.enabled) continue;
-    for (const anchor of ANCHORS) {
-      const t = ev.scheduledFor?.[anchor];
-      if (t == null) continue;
-      if (best == null || t < best.at) {
-        best = {
-          at: t,
-          anchor,
-          eventId: ev.id,
-          label: ev.label,
-          time: anchorTime(ev, anchor),
-        };
-      }
-    }
-  }
-  return best;
-}
-
-/** Global roster row for one event tab (EV-19). */
-async function rosterRow(url, record, openTabsByUrl) {
-  const openTab = openTabsByUrl.get(url);
-  const events = record.events;
-  const enabledCount = events.filter((e) => e.enabled).length;
-  return {
-    url,
-    title: record.title || url,
-    favIconUrl: openTab?.favIconUrl || null,
-    isOpen: !!openTab,
-    eventCount: events.length,
-    enabledCount,
-    next: tabNextFiring(events),
-  };
-}
-
-/** Events state for the popup: roster, current tab, perm, log, unacked. */
+/** Events state for the popup: current tab + its events. */
 async function buildEventsState() {
   const tab = await getCurrentTab();
   const current = tab && tab.url
@@ -1075,43 +864,12 @@ async function buildEventsState() {
     }
   }
   const events = record ? await Promise.all(record.events.map(toEventView)) : [];
-
-  // EV-19: global roster of every event tab — needs each tab's events shape
-  // with `scheduledFor` populated, so reuse the stored records (the `next`
-  // computation only looks at `scheduledFor`/`enabled`, no alarm read needed).
-  const tabs = await getEventTabs();
-  const openTabs = await chrome.tabs.query({});
-  const openByUrl = new Map();
-  for (const t of openTabs) if (t.url) openByUrl.set(t.url, t);
-  const roster = [];
-  for (const url of Object.keys(tabs)) {
-    roster.push(await rosterRow(url, tabs[url], openByUrl));
-  }
-  roster.sort((a, b) => (a.title || "").localeCompare(b.title || ""));
-
-  const permLevel = await getNotificationPermLevel();
-  const fireLog = await getRecentFireLog();
-  const unacked = await getUnackedFirings();
-
   return {
     current: current
       ? { ...current, isEventTab: !!record, eventCount: record ? record.events.length : 0 }
       : null,
     events,
-    roster,
-    permLevel,
-    fireLog,
-    unackedCount: unacked.length,
   };
-}
-
-/** Recent activity for the popup: last 24h capped at FIRE_LOG_DISPLAY_MAX (EV-23). */
-async function getRecentFireLog() {
-  const log = await getFireLog();
-  const cutoff = Date.now() - FIRE_LOG_TTL_MS;
-  const fresh = log.filter((e) => e?.ts >= cutoff);
-  fresh.sort((a, b) => b.ts - a.ts);
-  return fresh.slice(0, FIRE_LOG_DISPLAY_MAX);
 }
 
 /** Events state for the options page: every event tab and its events. */
@@ -1187,18 +945,6 @@ async function handleMessage(msg) {
     case "deleteEvent":
       return deleteEvent(msg.url, msg.id);
 
-    // --- EV-19/22/24: roster jump, test alert, popup-clears-unacked ---
-    case "jumpToEventTab":
-      await jumpToUrl(msg.url);
-      return { ok: true };
-    case "sendTestNotification":
-      return sendTestNotification();
-    case "popupOpened":
-      // EV-24: opening the popup acknowledges any unacked fires.
-      await clearUnackedFirings();
-      await refreshBadge();
-      return { ok: true };
-
     default:
       return { ok: false, error: "unknown message" };
   }
@@ -1215,34 +961,16 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 // Event wiring
 // ---------------------------------------------------------------------------
 
-// Core refresh / skip logic (FR-9..FR-12), plus event/snooze/unack firing (§9.4).
+// Core refresh / skip logic (FR-9..FR-12), plus event & snooze firing (§9.4).
 chrome.alarms.onAlarm.addListener(async (alarm) => {
-  // Catch any worker-error so a single failure doesn't kill subsequent fires
-  // (EV-23: `worker-error` status). Per-alarm branches still log their own
-  // delivery status; this is a safety net only.
-  try {
-    const parsed = parseEventAlarmName(alarm.name);
-    if (parsed !== null) {
-      await fireEvent(parsed.id, parsed.anchor);
-      return;
-    }
-    if (isSnoozeAlarmName(alarm.name)) {
-      await fireSnooze(alarm.name);
-      return;
-    }
-    if (isUnackAlarmName(alarm.name)) {
-      const notifId = alarm.name.slice(UNACK_ALARM_PREFIX.length);
-      await handleUnackFire(notifId);
-      return;
-    }
-  } catch (e) {
-    await appendFireLog({
-      id: `flog-err-${Date.now().toString(36)}`,
-      ts: Date.now(),
-      status: FIRE_STATUS.WORKER_ERROR,
-      error: String(e?.message || e),
-      alarmName: alarm.name,
-    }).catch(() => {});
+  // Event firing takes the alarm if it carries an event id+anchor or is a snooze.
+  const parsed = parseEventAlarmName(alarm.name);
+  if (parsed !== null) {
+    await fireEvent(parsed.id, parsed.anchor);
+    return;
+  }
+  if (isSnoozeAlarmName(alarm.name)) {
+    await fireSnooze(alarm.name);
     return;
   }
 
@@ -1337,7 +1065,6 @@ chrome.notifications.onButtonClicked.addListener(async (notifId, btnIdx) => {
   if (info.kind === "event") {
     if (btnIdx === 0) await jumpToUrl(info.url);
     else if (btnIdx === 1) await snoozeEvent(info.url, info.eventId, info.anchor || ANCHOR_IN);
-    await clearUnackFor(notifId); // EV-24: user acted within the 30s window
   } else if (info.kind === "confirm" && btnIdx === 0) {
     await unregisterEventTab(info.url);
   }
@@ -1348,20 +1075,14 @@ chrome.notifications.onButtonClicked.addListener(async (notifId, btnIdx) => {
 chrome.notifications.onClicked.addListener(async (notifId) => {
   const info = await getNotif(notifId);
   if (!info) return;
-  if (info.kind === "event") {
-    await jumpToUrl(info.url); // clicking the body = Jump
-    await clearUnackFor(notifId);
-  }
+  if (info.kind === "event") await jumpToUrl(info.url); // clicking the body = Jump
   await deleteNotif(notifId);
   await chrome.notifications.clear(notifId);
 });
 
 // Dismissing an alert is Ignore (EV-13); for a confirm it's Cancel. Either way
-// just drop the mapping — the action (if any) already ran above. EV-24:
-// dismissing also acks the fire, so clear the unack alarm/entry.
+// just drop the mapping — the action (if any) already ran above.
 chrome.notifications.onClosed.addListener(async (notifId) => {
-  const info = await getNotif(notifId);
-  if (info?.kind === "event") await clearUnackFor(notifId);
   await deleteNotif(notifId);
 });
 
