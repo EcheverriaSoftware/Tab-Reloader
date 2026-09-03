@@ -2,6 +2,7 @@ import {
   ANALYZER_PAGE,
   MAX_INTERVAL_MINUTES,
   MIN_INTERVAL_MINUTES,
+  MAX_RULES,
   clampInterval,
   clampSnooze,
   eventScheduleText,
@@ -91,6 +92,121 @@ async function showShortcut() {
     /* ignore */
   }
 }
+
+// ---------------------------------------------------------------------------
+// Auto-reload rules (§6.1.1) — the full management surface: view, edit,
+// enable, disable, delete. The popup's one-click "Always reload this site"
+// covers the common case; this is where the standing set is curated.
+// ---------------------------------------------------------------------------
+
+let rulesState = null;
+let editingRuleId = null;
+
+function showRuleMsg(text, kind = "warn") {
+  const el = $("#ruleMsg");
+  el.textContent = text;
+  el.className = `msg msg--${kind}`;
+  el.hidden = false;
+}
+
+function hideRuleMsg() {
+  $("#ruleMsg").hidden = true;
+}
+
+/** One-line summary under a rule: its interval and what it covers. */
+function ruleSummary(rule) {
+  const bits = [];
+  bits.push(rule.intervalMinutes == null
+    ? "Default interval"
+    : `Every ${rule.intervalMinutes} min`);
+  if (rule.wildcard) bits.push("includes subdomains");
+  if (rule.path) bits.push(`path starts with ${rule.path}`);
+  if (!rule.enabled) bits.push("disabled");
+  return bits.join(" · ");
+}
+
+function resetRuleForm() {
+  editingRuleId = null;
+  $("#rulePattern").value = "";
+  $("#ruleInterval").value = "";
+  $("#ruleSubmit").textContent = "Add rule";
+  $("#ruleCancel").hidden = true;
+  hideRuleMsg();
+}
+
+function openRuleEditor(rule) {
+  editingRuleId = rule.id;
+  $("#rulePattern").value = rule.display;
+  $("#ruleInterval").value = rule.intervalMinutes ?? "";
+  $("#ruleSubmit").textContent = "Save changes";
+  $("#ruleCancel").hidden = false;
+  hideRuleMsg();
+  $("#rulePattern").focus();
+}
+
+function renderRules() {
+  const list = $("#rulesList");
+  const tpl = $("#ruleRowTemplate");
+  list.textContent = "";
+
+  for (const rule of rulesState.rules) {
+    const node = tpl.content.firstElementChild.cloneNode(true);
+    node.dataset.id = rule.id;
+    node.classList.toggle("is-off", !rule.enabled);
+    node.querySelector(".rule__enabled").checked = rule.enabled;
+    node.querySelector(".rule__pattern").textContent = rule.display;
+    node.querySelector(".rule__sub").textContent = ruleSummary(rule);
+    list.appendChild(node);
+  }
+
+  $("#noRules").hidden = rulesState.rules.length > 0;
+  const n = rulesState.rules.length;
+  $("#ruleCount").textContent = n > 0 ? ` ${n} of ${MAX_RULES} rules saved.` : "";
+}
+
+async function refreshRules() {
+  rulesState = await send("getRulesState");
+  renderRules();
+}
+
+$("#ruleForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const pattern = $("#rulePattern").value;
+  const intervalMinutes = $("#ruleInterval").value || null;
+  const res = editingRuleId
+    ? await send("updateRule", { id: editingRuleId, patch: { pattern, intervalMinutes } })
+    : await send("addRule", { rule: { pattern, intervalMinutes } });
+  if (!res?.ok) {
+    showRuleMsg(res?.message || "Couldn't save the rule.");
+    return;
+  }
+  resetRuleForm();
+  await refreshRules();
+});
+
+$("#ruleCancel").addEventListener("click", resetRuleForm);
+$("#rulePattern").addEventListener("input", hideRuleMsg);
+
+$("#rulesList").addEventListener("click", async (e) => {
+  const row = e.target.closest(".rule");
+  if (!row) return;
+  const id = row.dataset.id;
+  if (e.target.closest(".rule__edit")) {
+    const rule = rulesState.rules.find((r) => r.id === id);
+    if (rule) openRuleEditor(rule);
+  } else if (e.target.closest(".rule__delete")) {
+    await send("deleteRule", { id });
+    if (editingRuleId === id) resetRuleForm();
+    await refreshRules();
+  }
+});
+
+$("#rulesList").addEventListener("change", async (e) => {
+  if (!e.target.classList.contains("rule__enabled")) return;
+  const id = e.target.closest(".rule").dataset.id;
+  await send("setRuleEnabled", { id, enabled: e.target.checked });
+  await refreshRules();
+});
 
 // ---------------------------------------------------------------------------
 // Event alert prefs (snooze duration, keep-on-screen)
@@ -350,8 +466,9 @@ async function refreshEvents() {
 // but don't clobber a form the user is currently filling in on this page.
 chrome.storage.onChanged.addListener((_changes, area) => {
   if (area !== "sync" && area !== "local") return;
-  if (document.querySelector("#eventTabs .evform:not([hidden])")) return;
-  refreshEvents();
+  // Don't clobber a form the user is currently filling in on this page.
+  if (!document.querySelector("#eventTabs .evform:not([hidden])")) refreshEvents();
+  if (editingRuleId === null) refreshRules();
 });
 
 // ---------------------------------------------------------------------------
@@ -363,7 +480,7 @@ async function init() {
   $("#showBadge").checked = await getShowBadge();
   $("#snoozeMinutes").value = await getSnoozeMinutes();
   $("#keepAlerts").checked = await getKeepAlertsOnScreen();
-  await Promise.all([showShortcut(), refreshEvents()]);
+  await Promise.all([showShortcut(), refreshEvents(), refreshRules()]);
 }
 
 init();

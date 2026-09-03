@@ -35,6 +35,71 @@
       </section>
 
       <section class="section">
+        <h2>Auto-reload rules</h2>
+        <p class="muted">
+          Say “this site, always” once and stop re-adding the same tabs by hand.
+          Any tab whose URL matches an enabled rule joins the reload list on its
+          own — when it opens, when it navigates there, and at browser start for
+          tabs that are already open. Rules persist across sessions and follow
+          your Chrome profile; the reload list itself does not.
+        </p>
+
+        <ul id="rulesList" class="rules"></ul>
+        <p id="noRules" class="muted" hidden>
+          No rules yet. Open a site you always want kept alive and click
+          <strong>“Always reload this site”</strong> in the toolbar popup, or add
+          one below.
+        </p>
+
+        <form id="ruleForm" class="ruleform">
+          <div class="ruleform__row">
+            <label class="field field--grow">
+              <span>Site</span>
+              <input
+                type="text"
+                id="rulePattern"
+                class="text mono"
+                placeholder="portal.example.com"
+                spellcheck="false"
+                autocapitalize="off"
+                autocomplete="off"
+              />
+            </label>
+            <label class="field">
+              <span>Every</span>
+              <input
+                type="number"
+                id="ruleInterval"
+                class="num"
+                min="1"
+                max="1440"
+                step="1"
+                placeholder="default"
+              />
+              <span>min</span>
+            </label>
+            <button type="submit" id="ruleSubmit" class="btn">Add rule</button>
+            <button type="button" id="ruleCancel" class="linkbtn" hidden>Cancel</button>
+          </div>
+          <p id="ruleMsg" class="msg" hidden></p>
+        </form>
+
+        <p class="muted small">
+          A pattern is a host with an optional <code>*.</code> subdomain wildcard
+          and an optional path prefix — <code>portal.example.com</code>,
+          <code>*.example.com</code>, <code>example.com/admin/*</code>. No regex;
+          scheme, port, and query string take no part in matching. Leave the
+          interval blank to use the default above. When several rules match one
+          tab, the most specific one sets the interval.
+          <span id="ruleCount"></span>
+        </p>
+        <p class="muted small">
+          Disabling or deleting a rule stops future enrollment. Tabs it already
+          enrolled keep reloading until you remove them.
+        </p>
+      </section>
+
+      <section class="section">
         <h2>Toolbar badge</h2>
         <label class="checkrow">
           <input type="checkbox" id="showBadge" />
@@ -118,13 +183,32 @@
       <section class="section section--note">
         <h2>How it works</h2>
         <ul class="notes">
-          <li>The list of reloading tabs is <strong>per session</strong> — it clears when the browser closes.</li>
+          <li>The list of reloading tabs is <strong>per session</strong> — it clears when the browser closes. <strong>Auto-reload rules</strong> persist, and rebuild the list each morning.</li>
+          <li>Taking a tab off the list <strong>sticks for the session</strong>: a rule won't immediately re-add what you just dismissed. Opening the site in a new tab enrolls it again.</li>
           <li>A refresh is <strong>skipped silently</strong> while you're viewing that tab (it's the active tab in the focused window).</li>
           <li>Manually reloading a tab resets its timer to a full interval.</li>
           <li>Events <strong>persist across sessions</strong>. An event that was due while the browser was closed does not fire late — recurring events re-arm for next time; missed one-time events are listed above.</li>
         </ul>
       </section>
     </main>
+
+    <!-- Auto-reload rule row template -->
+    <template id="ruleRowTemplate">
+      <li class="rule">
+        <label class="switch switch--sm" title="Enable / disable">
+          <input type="checkbox" class="rule__enabled" />
+          <span class="switch__slider"></span>
+        </label>
+        <div class="rule__meta">
+          <div class="rule__pattern"></div>
+          <div class="rule__sub"></div>
+        </div>
+        <div class="rule__actions">
+          <button class="iconbtn rule__edit" title="Edit">✎</button>
+          <button class="iconbtn rule__delete" title="Delete">✕</button>
+        </div>
+      </li>
+    </template>
 
     <!-- Event row template -->
     <template id="eventRowTemplate">

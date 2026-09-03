@@ -10,16 +10,23 @@ import {
   alarmNameForTab,
   anchorActionLabel,
   anchorTimeField,
+  bestRuleForUrl,
   clampInterval,
   clampSnooze,
   computeNextOccurrence,
+  displayRulePattern,
   eventAlarmName,
   formatTimeOfDay,
   genId,
+  hostOnlyPattern,
+  isMatchableUrl,
   isSnoozeAlarmName,
   normalizeDays,
+  normalizeRulePattern,
   parseEventAlarmName,
   parseTimeOfDay,
+  proposeRulePattern,
+  ruleMatchesUrl,
   tabIdFromAlarmName,
   ANALYZER_COMMAND,
   ANALYZER_PAGE,
@@ -30,9 +37,12 @@ import {
   DEFAULT_INTERVAL_KEY,
   EVENTS_COMMAND,
   EVENT_NOTIF_PREFIX,
+  MAX_RULES,
   RELOAD_COMMAND,
   SHOW_BADGE_KEY,
   SNOOZE_ALARM_PREFIX,
+  SOURCE_MANUAL,
+  SOURCE_RULE,
 } from "./common/constants.js";
 import {
   deleteEntry,
@@ -46,14 +56,21 @@ import {
   getKeepAlertsOnScreen,
   getList,
   getNotif,
+  getRules,
   getShowBadge,
   getSnooze,
   getSnoozeMinutes,
+  getSuppressed,
+  isSuppressed,
   putEntry,
   putEventTab,
   putNotif,
   putSnooze,
   setLastUsedInterval,
+  setRules,
+  suppressTab,
+  unsuppressTab,
+  unsuppressTabs,
 } from "./common/storage.js";
 
 const BADGE_COLOR = "#2563eb";
@@ -106,7 +123,11 @@ async function clearTabAlarm(tabId) {
 // List mutations
 // ---------------------------------------------------------------------------
 
-async function addTab(tabId, overrideMinutes = null) {
+/**
+ * Put a tab on the reload list. `origin` records *why* it is there (§6.1.1) so
+ * the list can always explain itself; it defaults to a manual add.
+ */
+async function addTab(tabId, overrideMinutes = null, origin = null) {
   const tab = await chrome.tabs.get(tabId).catch(() => null);
   if (!tab) return false;
   await putEntry({
@@ -115,16 +136,29 @@ async function addTab(tabId, overrideMinutes = null) {
     paused: false,
     url: tab.url ?? "",
     addedAt: Date.now(),
+    source: origin?.source ?? SOURCE_MANUAL,
+    ruleId: origin?.ruleId ?? null,
+    rulePattern: origin?.rulePattern ?? null,
   });
   await scheduleTab(tabId);
   await refreshBadge();
   return true;
 }
 
-async function removeTab(tabId) {
+/**
+ * Take a tab off the reload list.
+ *
+ * `suppressAuto` marks the tab excused from auto-enrollment for the rest of the
+ * session (§6.1.1) — set on every user-initiated removal so a rule can never
+ * immediately re-add what the user just dismissed. Housekeeping removals (the
+ * tab closed, or vanished while the worker slept) leave suppression alone:
+ * there is no tab left to excuse, and the id will be reused by an unrelated tab.
+ */
+async function removeTab(tabId, { suppressAuto = false } = {}) {
   await clearTabAlarm(tabId);
   const existed = await deleteEntry(tabId);
   selfReloads.delete(tabId);
+  if (suppressAuto) await suppressTab(tabId);
   await refreshBadge();
   return existed;
 }
@@ -183,11 +217,254 @@ async function toggleCurrentTab() {
   if (!tab || tab.id == null) return { ok: false };
   const existing = await getEntry(tab.id);
   if (existing) {
-    await removeTab(tab.id);
+    await removeTab(tab.id, { suppressAuto: true });
     return { ok: true, added: false, tabId: tab.id };
   }
   await addTab(tab.id);
   return { ok: true, added: true, tabId: tab.id };
+}
+
+// ===========================================================================
+// Auto-reload rules (§6.1.1)
+//
+// A rule carries standing intent across restarts: "this site, always". The
+// reload list stays ephemeral, and these rules are what rebuild it — evaluated
+// when a tab is opened, when it navigates, and once at browser start for tabs
+// that are already open.
+//
+// A rule only ever decides *whether a tab gets reloaded*. It never modifies,
+// blocks, or navigates a page, and tab URLs that match nothing are used for
+// nothing else: not stored, not logged, not transmitted (§9).
+// ===========================================================================
+
+/** Strip a rule down to what is stored — matching fields are denormalized. */
+function toRuleRecord({ id, parsed, intervalMinutes, enabled, createdAt }) {
+  return {
+    id,
+    pattern: parsed.pattern,
+    host: parsed.host,
+    wildcard: parsed.wildcard,
+    path: parsed.path,
+    intervalMinutes: intervalMinutes ?? null,
+    enabled: enabled !== false,
+    createdAt: createdAt ?? Date.now(),
+  };
+}
+
+/**
+ * Enroll one tab if an enabled rule claims it. Returns true if it was added.
+ *
+ * Order matters: a tab already on the list is left exactly as it is (a manual
+ * add, a per-tab interval, or a pause must never be overwritten by a rule), and
+ * a tab the user dismissed this session is skipped outright.
+ */
+async function enrollTabIfMatched(tab, hints = {}) {
+  if (!tab || tab.id == null || !isMatchableUrl(tab.url)) return false;
+
+  // A sweep passes the list and suppression map it already read, so walking
+  // every open tab doesn't re-read the whole session list once per tab.
+  const listed = hints.list
+    ? String(tab.id) in hints.list
+    : !!(await getEntry(tab.id));
+  if (listed) return false;
+
+  const suppressed = hints.suppressed
+    ? String(tab.id) in hints.suppressed
+    : await isSuppressed(tab.id);
+  if (suppressed) return false;
+
+  const rules = hints.rules ?? (await getRules());
+  const rule = bestRuleForUrl(rules, tab.url);
+  if (!rule) return false;
+
+  return addTab(tab.id, rule.intervalMinutes ?? null, {
+    source: SOURCE_RULE,
+    ruleId: rule.id,
+    rulePattern: rule.pattern,
+  });
+}
+
+/**
+ * Evaluate every open tab against the rule set. Run at browser start (for tabs
+ * already open), on install/update (so a new rule set takes effect without
+ * waiting for a restart), and after any rule change.
+ */
+async function sweepAllTabs() {
+  const rules = await getRules();
+  if (rules.length === 0) return 0;
+  const tabs = await chrome.tabs.query({}).catch(() => []);
+  // Read the shared state once. Each tab is visited at most once, so a tab
+  // enrolled mid-sweep is never re-examined and the snapshot can't go stale.
+  const [list, suppressed] = await Promise.all([getList(), getSuppressed()]);
+  let added = 0;
+  for (const tab of tabs) {
+    if (await enrollTabIfMatched(tab, { rules, list, suppressed })) added++;
+  }
+  return added;
+}
+
+/**
+ * Saving or re-enabling a rule is an explicit statement of intent for the sites
+ * it covers, so it lifts this session's suppression on the tabs it matches —
+ * otherwise "Always reload this site" would silently do nothing on the very tab
+ * the user was looking at when they dismissed it earlier (flow 7.2).
+ */
+async function clearSuppressionFor(rule) {
+  const tabs = await chrome.tabs.query({}).catch(() => []);
+  const ids = tabs.filter((t) => t.id != null && ruleMatchesUrl(rule, t.url)).map((t) => t.id);
+  if (ids.length) await unsuppressTabs(ids);
+}
+
+/** Validate + clamp the optional per-rule interval. null means "global default". */
+async function normalizeRuleInterval(raw) {
+  if (raw == null || raw === "") return { ok: true, value: null };
+  const def = await getDefaultInterval();
+  const { value, invalid } = clampInterval(raw, def);
+  if (invalid) return { ok: false, message: "Enter a number of minutes, or leave it blank." };
+  return { ok: true, value };
+}
+
+async function addRule({ pattern, intervalMinutes = null, enabled = true } = {}) {
+  const parsed = normalizeRulePattern(pattern);
+  if (!parsed.ok) return { ok: false, error: parsed.error, message: parsed.message };
+
+  const rules = await getRules();
+  const existing = rules.find((r) => r.pattern === parsed.pattern);
+  if (existing) {
+    if (existing.enabled) {
+      return {
+        ok: false,
+        error: "duplicate",
+        message: `A rule for ${displayRulePattern(parsed)} already exists.`,
+      };
+    }
+    // A *disabled* rule for exactly this pattern: clicking "Always reload this
+    // site" again plainly means turn it back on, not "that already exists".
+    return updateRule(existing.id, { enabled: true, intervalMinutes });
+  }
+  // Soft cap with a clear message rather than a silent failure (open question #7).
+  if (rules.length >= MAX_RULES) {
+    return {
+      ok: false,
+      error: "limit",
+      message: `You can save up to ${MAX_RULES} rules. Delete one to add another.`,
+    };
+  }
+
+  const interval = await normalizeRuleInterval(intervalMinutes);
+  if (!interval.ok) return { ok: false, error: "interval", message: interval.message };
+
+  const rule = toRuleRecord({
+    id: genId(),
+    parsed,
+    intervalMinutes: interval.value,
+    enabled,
+  });
+  rules.push(rule);
+  await setRules(rules);
+
+  if (rule.enabled) {
+    await clearSuppressionFor(rule);
+    await sweepAllTabs();
+  }
+  return { ok: true, rule };
+}
+
+async function updateRule(id, patch = {}) {
+  const rules = await getRules();
+  const idx = rules.findIndex((r) => r.id === id);
+  if (idx === -1) return { ok: false, error: "notfound", message: "That rule no longer exists." };
+
+  const current = rules[idx];
+  let parsed = {
+    ok: true,
+    pattern: current.pattern,
+    host: current.host,
+    wildcard: current.wildcard,
+    path: current.path,
+  };
+  if (patch.pattern != null && patch.pattern !== current.pattern) {
+    parsed = normalizeRulePattern(patch.pattern);
+    if (!parsed.ok) return { ok: false, error: parsed.error, message: parsed.message };
+    if (rules.some((r, i) => i !== idx && r.pattern === parsed.pattern)) {
+      return {
+        ok: false,
+        error: "duplicate",
+        message: `A rule for ${displayRulePattern(parsed)} already exists.`,
+      };
+    }
+  }
+
+  let intervalMinutes = current.intervalMinutes;
+  if ("intervalMinutes" in patch) {
+    const interval = await normalizeRuleInterval(patch.intervalMinutes);
+    if (!interval.ok) return { ok: false, error: "interval", message: interval.message };
+    intervalMinutes = interval.value;
+  }
+
+  const wasEnabled = current.enabled;
+  const rule = toRuleRecord({
+    id: current.id,
+    parsed,
+    intervalMinutes,
+    enabled: "enabled" in patch ? !!patch.enabled : current.enabled,
+    createdAt: current.createdAt,
+  });
+  rules[idx] = rule;
+  await setRules(rules);
+
+  // Newly enabled, or newly re-pointed: re-arm and sweep. Disabling only stops
+  // *future* enrollment — tabs the rule already enrolled keep reloading until
+  // the user removes them (§6.1.1).
+  if (rule.enabled && (!wasEnabled || rule.pattern !== current.pattern)) {
+    await clearSuppressionFor(rule);
+  }
+  if (rule.enabled) await sweepAllTabs();
+  return { ok: true, rule };
+}
+
+async function deleteRule(id) {
+  const rules = await getRules();
+  const next = rules.filter((r) => r.id !== id);
+  if (next.length === rules.length) return { ok: false, error: "notfound" };
+  await setRules(next);
+  // Tabs this rule enrolled deliberately keep reloading (§6.1.1); their entries
+  // retain the pattern text so the list can still say where they came from.
+  return { ok: true };
+}
+
+/** Rules + the current tab's context, for the popup and the options page. */
+async function buildRulesState() {
+  const rules = await getRules();
+  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  const url = tab?.url ?? "";
+
+  let current = null;
+  if (isMatchableUrl(url)) {
+    const covering = bestRuleForUrl(rules, url);
+    const proposal = proposeRulePattern(url);
+    const wholeSite = hostOnlyPattern(url);
+    current = {
+      tabId: tab.id,
+      url,
+      title: tab.title || url,
+      proposal,
+      wholeSite,
+      // Whether the "Whole site" shortcut would actually change anything.
+      hasPath: proposal !== wholeSite,
+      coveredBy: covering ? covering.pattern : null,
+      coveredByEnabled: !!covering,
+    };
+  }
+
+  return {
+    rules: rules
+      .slice()
+      .sort((a, b) => a.createdAt - b.createdAt)
+      .map((r) => ({ ...r, display: displayRulePattern(r) })),
+    max: MAX_RULES,
+    current,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -264,6 +541,10 @@ async function buildState() {
       nextFireAt,
       isCurrent: !!active && tab.id === active.id,
       addedAt: entry.addedAt,
+      // Why this row is on the list. The pattern is read off the entry rather
+      // than re-matched, so it stays truthful even after the rule is deleted.
+      source: entry.source === SOURCE_RULE ? SOURCE_RULE : SOURCE_MANUAL,
+      rulePattern: entry.rulePattern ? displayRulePattern(entry.rulePattern) : null,
     });
   }
 
@@ -902,7 +1183,8 @@ async function handleMessage(msg) {
     case "addTab":
       return { ok: await addTab(msg.tabId, msg.overrideMinutes ?? null) };
     case "removeTab":
-      return { ok: await removeTab(msg.tabId) };
+      // A removal the user asked for — excuse the tab from re-enrollment.
+      return { ok: await removeTab(msg.tabId, { suppressAuto: true }) };
     case "pauseTab":
       await pauseTab(msg.tabId);
       return { ok: true };
@@ -926,6 +1208,18 @@ async function handleMessage(msg) {
       if (entry && !entry.paused) await scheduleTab(msg.tabId);
       return { ok: true };
     }
+
+    // --- auto-reload rules (§6.1.1) ---
+    case "getRulesState":
+      return buildRulesState();
+    case "addRule":
+      return addRule(msg.rule ?? {});
+    case "updateRule":
+      return updateRule(msg.id, msg.patch ?? {});
+    case "setRuleEnabled":
+      return updateRule(msg.id, { enabled: !!msg.enabled });
+    case "deleteRule":
+      return deleteRule(msg.id);
 
     // --- events ---
     case "getEventsState":
@@ -1004,6 +1298,9 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 chrome.tabs.onRemoved.addListener(async (tabId) => {
   const entry = await getEntry(tabId);
   if (entry) await removeTab(tabId);
+  // Chrome reuses tab ids, so a closed tab must not leave its auto-enrollment
+  // suppression behind for whatever tab inherits the id (§6.1.1).
+  await unsuppressTab(tabId);
 });
 
 // Manual-reload detection (FR-10a) and navigation tracking (edge cases §10).
@@ -1025,6 +1322,34 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
 
   // Otherwise the user reloaded manually: reset the interval timer (FR-10a).
   if (!entry.paused) await scheduleTab(tabId);
+});
+
+// Auto-enrollment (§6.1.1). `changeInfo.url` covers navigation; `complete`
+// covers a freshly-opened tab, which starts life at about:blank and only reveals
+// its real URL as it loads. Between them, every "tab opened" and "tab navigated
+// to a new URL" moment is evaluated exactly as the PRD specifies.
+chrome.tabs.onUpdated.addListener(async (_tabId, changeInfo, tab) => {
+  if (!changeInfo.url && changeInfo.status !== "complete") return;
+  if (!isMatchableUrl(tab?.url)) return;
+
+  const entry = await getEntry(tab.id);
+  if (!entry) {
+    await enrollTabIfMatched(tab);
+    return;
+  }
+
+  // Already listed. Leave the schedule alone — the reload list is keyed by tab,
+  // not URL — but if a rule-enrolled tab has moved on, re-point its "why" text
+  // at whatever rule explains it now so the popup never shows a stale reason.
+  if (changeInfo.url && entry.source === SOURCE_RULE) {
+    const rule = bestRuleForUrl(await getRules(), tab.url);
+    if (rule && rule.id !== entry.ruleId) {
+      entry.ruleId = rule.id;
+      entry.rulePattern = rule.pattern;
+      entry.url = tab.url;
+      await putEntry(entry);
+    }
+  }
 });
 
 // Keep an event tab's stored title current when a matching tab's title changes
@@ -1117,6 +1442,9 @@ chrome.runtime.onInstalled.addListener(async () => {
   // First-run defaults are lazily provided by storage getters; nothing to seed.
   await clearStrayAlarms();
   await reconcileEvents(); // rebuild event alarms cleared on update (§9.6)
+  // Rules survive an update but storage.session does not, so re-enroll matching
+  // tabs now rather than making the user restart Chrome to get them back.
+  await sweepAllTabs();
   await refreshBadge();
 });
 
@@ -1124,5 +1452,8 @@ chrome.runtime.onStartup.addListener(async () => {
   // New browser session: storage.session is empty (FR-14); drop stray alarms.
   await clearStrayAlarms();
   await reconcileEvents(); // re-arm persisted events; no stale catch-up (EV-18)
+  // §6.1.1: evaluate rules once at browser start for tabs already open — this
+  // is what rebuilds the morning's reload list with no input from the user.
+  await sweepAllTabs();
   await refreshBadge();
 });

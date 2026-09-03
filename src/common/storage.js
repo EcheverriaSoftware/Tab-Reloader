@@ -13,10 +13,12 @@ import {
   KEEP_ALERTS_KEY,
   LAST_USED_INTERVAL_KEY,
   NOTIF_MAP_KEY,
+  RULES_KEY,
   SESSION_LIST_KEY,
   SHOW_BADGE_KEY,
   SNOOZE_MAP_KEY,
   SNOOZE_MINUTES_KEY,
+  SUPPRESSED_KEY,
 } from "./constants.js";
 
 // ---------------------------------------------------------------------------
@@ -224,6 +226,10 @@ export async function deleteSnooze(alarmName) {
 //     paused:          boolean
 //     url:             string          // last known URL (for manual-reload detection)
 //     addedAt:         number          // epoch ms
+//     source:          "manual"|"rule" // why the tab is listed (§6.1.1)
+//     ruleId:          string | null   // the rule that enrolled it, if any
+//     rulePattern:     string | null   // its pattern, kept so the "why" line
+//                                      // survives the rule being deleted
 //   }
 // The *effective* interval is overrideMinutes ?? defaultInterval.
 // ---------------------------------------------------------------------------
@@ -257,4 +263,73 @@ export async function deleteEntry(tabId) {
     return true;
   }
   return false;
+}
+
+// ---------------------------------------------------------------------------
+// Auto-reload rules (§6.1.1) — persistent, profile-following.
+//
+// Kept as a single array in the synced pref area so rules follow the user's
+// Chrome profile and rebuild the (ephemeral) reload list each morning. A write
+// that outgrows the sync per-item quota degrades to local via setPref, which
+// costs cross-device sync but never loses the rules.
+// ---------------------------------------------------------------------------
+
+/**
+ * All saved rules. Records are validated on read: storage is shared with sync
+ * and may hold anything an older or newer build wrote, and a malformed rule
+ * must never take part in matching.
+ */
+export async function getRules() {
+  const raw = await getPref(RULES_KEY, []);
+  if (!Array.isArray(raw)) return [];
+  return raw.filter(
+    (r) =>
+      r &&
+      typeof r.id === "string" &&
+      typeof r.pattern === "string" &&
+      typeof r.host === "string" &&
+      r.host.length > 0,
+  );
+}
+
+export async function setRules(rules) {
+  await setPref(RULES_KEY, rules);
+}
+
+// ---------------------------------------------------------------------------
+// Auto-enrollment suppression (chrome.storage.session).
+//
+// "Removing an auto-enrolled tab sticks" (§6.1.1): a tab the user took off the
+// list is excused from re-enrollment for the rest of the session, so a rule can
+// never immediately re-add what was just dismissed. Session-scoped by design —
+// opening the site in a new tab enrolls again, and tomorrow is a clean slate.
+// ---------------------------------------------------------------------------
+
+export async function getSuppressed() {
+  return getSessionMap(SUPPRESSED_KEY);
+}
+
+export async function isSuppressed(tabId) {
+  return String(tabId) in (await getSuppressed());
+}
+
+export async function suppressTab(tabId) {
+  await setSessionMapEntry(SUPPRESSED_KEY, String(tabId), Date.now());
+}
+
+export async function unsuppressTab(tabId) {
+  await deleteSessionMapEntry(SUPPRESSED_KEY, String(tabId));
+}
+
+/** Lift suppression for a set of tab ids — an explicit new rule re-arms intent. */
+export async function unsuppressTabs(tabIds) {
+  const map = await getSuppressed();
+  let changed = false;
+  for (const id of tabIds) {
+    if (String(id) in map) {
+      delete map[String(id)];
+      changed = true;
+    }
+  }
+  if (changed) await chrome.storage.session.set({ [SUPPRESSED_KEY]: map });
 }

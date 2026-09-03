@@ -5,8 +5,10 @@
   --muted: #6b7280;
   --line: #e5e7eb;
   --accent: #2563eb;
+  --accent-weak: #eff4ff;
   --ok: #16a34a;
   --danger: #dc2626;
+  --radius: 10px;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -17,6 +19,7 @@
     --muted: #9aa1ad;
     --line: #2c303b;
     --accent: #5b8cff;
+    --accent-weak: #232a3d;
     --ok: #4ade80;
     --danger: #f06363;
   }
@@ -510,4 +513,101 @@ kbd {
   display: flex;
   gap: 8px;
   flex: 0 0 auto;
+}
+
+/* ==========================================================================
+   Auto-reload rules (PRD §6.1.1)
+   ========================================================================== */
+
+.rules {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.rule {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.rule.is-off {
+  opacity: 0.6;
+}
+
+.rule__meta {
+  flex: 1;
+  min-width: 0;
+}
+
+.rule__pattern {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rule__sub {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rule__actions {
+  display: flex;
+  gap: 2px;
+}
+
+.rule__delete:hover {
+  color: var(--danger);
+}
+
+.ruleform__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.field--grow {
+  flex: 1;
+  min-width: 220px;
+}
+
+.text {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 7px 9px;
+}
+
+.text:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.mono,
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+code {
+  font-size: 0.92em;
+  background: var(--accent-weak);
+  border-radius: 4px;
+  padding: 1px 4px;
 }

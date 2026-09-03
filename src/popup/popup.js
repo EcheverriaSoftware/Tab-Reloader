@@ -1,7 +1,9 @@
 import {
   ANALYZER_PAGE,
   DEFAULT_INTERVAL_MINUTES,
+  SOURCE_RULE,
   clampInterval,
+  displayRulePattern,
   eventScheduleText,
   eventTimesText,
   formatTimeOfDay,
@@ -16,6 +18,7 @@ function send(type, extra = {}) {
 }
 
 let state = null;
+let rulesState = null;
 let tickTimer = null;
 
 // --- formatting ------------------------------------------------------------
@@ -95,6 +98,15 @@ function renderList() {
     const status = node.querySelector(".row__status");
     status.textContent = statusText(item);
 
+    // Automatic behaviour is never mysterious: every row says why it is here.
+    const src = node.querySelector(".row__src");
+    if (item.source === SOURCE_RULE && item.rulePattern) {
+      src.textContent = `Matched ${item.rulePattern}`;
+      src.classList.add("row__src--auto");
+    } else {
+      src.textContent = "Added by you";
+    }
+
     const intervalInput = node.querySelector(".row__interval");
     intervalInput.value = item.effectiveInterval;
 
@@ -115,6 +127,7 @@ function renderList() {
 function render() {
   renderCurrent();
   renderList();
+  renderAutoRule();
 }
 
 // Tick only updates countdown text, cheap and runs only while popup is open.
@@ -129,7 +142,7 @@ function tick() {
 }
 
 async function refresh() {
-  state = await send("getState");
+  [state, rulesState] = await Promise.all([send("getState"), send("getRulesState")]);
   render();
 }
 
@@ -202,6 +215,119 @@ $("#list").addEventListener("change", async (e) => {
   const row = e.target.closest(".row");
   const tabId = Number(row.dataset.tabId);
   await send("setTabInterval", { tabId, minutes: e.target.value });
+  await refresh();
+});
+
+// ===========================================================================
+// Auto-reload rule for the current site (PRD §6.1.1)
+//
+// One click to say "this site, always". The proposed pattern is derived from
+// the current tab and shown pre-filled and editable — the user never has to
+// hand-write a pattern to get the common case.
+// ===========================================================================
+
+let autoFormOpen = false;
+
+function showAutoMsg(text) {
+  const m = $("#autoMsg");
+  m.textContent = text;
+  m.hidden = false;
+}
+
+function hideAutoMsg() {
+  const m = $("#autoMsg");
+  m.hidden = true;
+  m.textContent = "";
+}
+
+function closeAutoForm() {
+  autoFormOpen = false;
+  hideAutoMsg();
+  renderAutoRule();
+}
+
+function openAutoForm() {
+  const cur = rulesState?.current;
+  if (!cur) return;
+  autoFormOpen = true;
+  $("#autoPattern").value = cur.proposal ?? "";
+  $("#autoInterval").value = "";
+  hideAutoMsg();
+  renderAutoRule();
+  $("#autoPattern").focus();
+  $("#autoPattern").select();
+}
+
+function renderAutoRule() {
+  const block = $("#autoBlock");
+  const cur = rulesState?.current;
+
+  // Only http(s) pages can be matched by a rule at all.
+  if (!cur) {
+    block.hidden = true;
+    autoFormOpen = false;
+    return;
+  }
+  block.hidden = false;
+
+  const covered = $("#autoCovered");
+  const offer = $("#autoAddBtn");
+  const form = $("#autoForm");
+
+  if (autoFormOpen) {
+    covered.hidden = true;
+    offer.hidden = true;
+    form.hidden = false;
+    // "Whole site" only helps when the proposal actually carries a path.
+    $("#autoWholeSite").hidden = $("#autoPattern").value === cur.wholeSite;
+    return;
+  }
+
+  form.hidden = true;
+  if (cur.coveredBy) {
+    covered.hidden = false;
+    offer.hidden = true;
+    $("#autoCoveredPattern").textContent = displayRulePattern(cur.coveredBy);
+  } else {
+    covered.hidden = true;
+    offer.hidden = false;
+  }
+}
+
+$("#autoAddBtn").addEventListener("click", openAutoForm);
+$("#autoCancel").addEventListener("click", closeAutoForm);
+$("#autoManageBtn").addEventListener("click", () => chrome.runtime.openOptionsPage());
+
+$("#autoWholeSite").addEventListener("click", () => {
+  const cur = rulesState?.current;
+  if (!cur) return;
+  $("#autoPattern").value = cur.wholeSite;
+  hideAutoMsg();
+  $("#autoWholeSite").hidden = true;
+  $("#autoPattern").focus();
+});
+
+$("#autoPattern").addEventListener("input", () => {
+  hideAutoMsg();
+  const cur = rulesState?.current;
+  if (cur) $("#autoWholeSite").hidden = $("#autoPattern").value === cur.wholeSite;
+});
+
+$("#autoForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const res = await send("addRule", {
+    rule: {
+      pattern: $("#autoPattern").value,
+      intervalMinutes: $("#autoInterval").value || null,
+    },
+  });
+  if (!res?.ok) {
+    showAutoMsg(res?.message || "Couldn't save the rule.");
+    return;
+  }
+  autoFormOpen = false;
+  // The background sweeps open tabs on save, so the current tab is already
+  // enrolled by the time this refresh lands (flow 7.2 step 3).
   await refresh();
 });
 

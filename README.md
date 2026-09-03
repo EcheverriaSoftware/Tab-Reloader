@@ -26,7 +26,7 @@ glance, in §6. The two deeper features have their own spec:
 
 | Pillar | Spec | Persistence |
 |---|---|---|
-| **Tab Reloading** | [PRD.md §6.1](docs/PRD.md) | **Per session** — the reload list clears on browser close. |
+| **Tab Reloading** | [PRD.md §6.1](docs/PRD.md) | **Mixed** — the reload list clears on browser close; **auto-reload rules** persist and rebuild it. |
 | **Clock In/Out & shift events** | [EVENTS_PRD.md](docs/EVENTS_PRD.md) | **Persistent** — survives restarts, may sync across devices. |
 | **DMP File Analyzer** | [PRD-DMP-Analysis.md](docs/PRD-DMP-Analysis.md) | **None** — stateless; each dump is parsed on the spot. |
 
@@ -55,6 +55,38 @@ dashboards and queues benefit too.
   next auto-refresh a full interval out.
 - The **default interval persists** (and may sync across devices); the **active
   reload list is never persisted** across sessions.
+
+#### Auto-reload rules — "this site, always"
+
+Re-adding the same five portals every morning is its own chore. A rule says it
+once ([PRD.md §6.1.1](docs/PRD.md)):
+
+- **One click to create**: on any site, the popup's **"Always reload this site"**
+  proposes a pattern from the current URL — pre-filled and editable, with a
+  **Whole site** shortcut to drop the path. You never hand-write a pattern for
+  the common case.
+- **Automatic enrollment**: any tab matching an enabled rule joins the reload
+  list on its own — when it opens, when it navigates there, and once at browser
+  start for tabs already open. Rules **persist and follow your Chrome profile**,
+  so they rebuild the list each morning with no input from you.
+- **Small pattern syntax**: a host, an optional `*.` subdomain wildcard, and an
+  optional path prefix — `portal.example.com`, `*.example.com`,
+  `example.com/admin/*`. No regex; scheme, port, and query string take no part
+  in matching. When several rules match, the most specific one sets the interval
+  (exact host over wildcard, then longer path prefix).
+- **Auto-enrolled tabs are ordinary rows**: pause them, give them their own
+  interval, remove them — and the viewing-skip applies exactly as it does to a
+  manual add.
+- **Removing one sticks**: a tab you take off the list is excused from
+  re-enrollment for the rest of the session, so a rule can never immediately
+  re-add what you just dismissed. Opening the site in a new tab enrolls again.
+- **Never mysterious**: every row on the list says why it's there — *"Added by
+  you"* or *"Matched `*.example.com`"*.
+- **Managed in options**: view, edit, enable, disable, delete. Disabling or
+  deleting stops future enrollment; tabs already enrolled keep reloading until
+  you remove them. Up to 50 rules.
+- **No bundled site list, no inference.** A rule exists only because you saved
+  it — the plugin never proposes one from watching you browse.
 
 ### Clock In/Out & shift events
 
@@ -166,9 +198,15 @@ docs/
   absolute `when` for event times), so timers survive the MV3 service worker
   being suspended. The alarms API floor of ~1 minute is the minimum reload
   interval.
-- **State** lives in `chrome.storage.session` (the active reload list — cleared
-  on browser close) and `chrome.storage.sync` with a `local` fallback (the
-  default interval, preferences, and persistent events).
+- **State** lives in `chrome.storage.session` (the active reload list, and the
+  set of tabs excused from auto-enrollment — both cleared on browser close) and
+  `chrome.storage.sync` with a `local` fallback (the default interval,
+  preferences, auto-reload rules, and persistent events).
+- **Rule matching** happens entirely in the service worker, comparing open tab
+  URLs against the user's saved patterns. URLs that match nothing are used for
+  nothing else — not stored, not logged, not transmitted. No browsing history is
+  collected, and a rule only ever decides *whether a tab gets reloaded*; it never
+  modifies, blocks, or navigates a page.
 - **Viewing detection** uses `chrome.tabs`/`chrome.windows` focus state only
   (active tab + focused window). No idle/input check — a reader producing no
   input must not be interrupted.

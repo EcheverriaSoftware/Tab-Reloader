@@ -258,3 +258,201 @@ export function clampSnooze(input, fallback = DEFAULT_SNOOZE_MINUTES) {
   if (n > MAX_SNOOZE_MINUTES) return MAX_SNOOZE_MINUTES;
   return n;
 }
+
+// ===========================================================================
+// Auto-reload rules (PRD §6.1.1)
+//
+// A rule is the user saying "this site, always": any tab whose URL matches an
+// enabled rule joins the reload list on its own, with no shortcut press and no
+// popup visit. Rules persist across sessions; the reload list does not — rules
+// are what rebuild it each morning.
+//
+// Pattern syntax is deliberately tiny: a host with an optional `*.` subdomain
+// wildcard, plus an optional path prefix — `portal.example.com`,
+// `*.example.com`, `example.com/admin/*`. No regex, and query strings never
+// participate (open question #7 — both deferred past v1).
+// ===========================================================================
+
+/** Persistent rule list (chrome.storage.sync, falling back to local). */
+export const RULES_KEY = "autoReloadRules";
+
+/**
+ * Tabs the user took off the list, excused from re-enrollment for the rest of
+ * the session (chrome.storage.session) so a rule can never immediately re-add
+ * what was just dismissed (§6.1.1).
+ */
+export const SUPPRESSED_KEY = "autoSuppressedTabs";
+
+/** Soft cap on saved rules — storage-quota safety (open question #7). */
+export const MAX_RULES = 50;
+
+/** Why a tab is on the reload list — the list always states its source. */
+export const SOURCE_MANUAL = "manual";
+export const SOURCE_RULE = "rule";
+
+const HOST_LABEL_RE = /^[a-z0-9_]([a-z0-9_-]*[a-z0-9_])?$/;
+
+function isValidHost(host) {
+  if (!host || host.length > 253) return false;
+  return host.split(".").every((label) => HOST_LABEL_RE.test(label));
+}
+
+/**
+ * Parse and canonicalize a user-typed pattern.
+ *
+ * Accepts what people naturally paste — a full URL, a bare host, a leading
+ * `*.`, a trailing `/*` — and reduces it to the v1 grammar. Scheme, port,
+ * query, and hash are stripped rather than rejected: they carry no meaning in
+ * a host+path-prefix match, and silently failing on a pasted URL would be
+ * worse than quietly narrowing it.
+ *
+ * Returns { ok: true, pattern, host, wildcard, path } where `pattern` is the
+ * canonical form to store and compare, or { ok: false, error, message }.
+ */
+export function normalizeRulePattern(input) {
+  const fail = (error, message) => ({ ok: false, error, message });
+  if (typeof input !== "string") return fail("empty", "Enter a site to match.");
+
+  let raw = input.trim();
+  if (!raw) return fail("empty", "Enter a site to match.");
+
+  raw = raw.replace(/^[a-z][a-z0-9+.-]*:\/\//i, ""); // scheme
+  raw = raw.replace(/^\/\//, ""); // protocol-relative
+  raw = raw.split("#")[0].split("?")[0]; // hash + query never participate (v1)
+  if (!raw) return fail("empty", "Enter a site to match.");
+
+  const slash = raw.indexOf("/");
+  let hostPart = slash === -1 ? raw : raw.slice(0, slash);
+  let path = slash === -1 ? "" : raw.slice(slash);
+
+  hostPart = hostPart.trim().toLowerCase().replace(/^\.+/, "");
+  hostPart = hostPart.replace(/@.*$/, ""); // userinfo, if a URL was pasted
+  hostPart = hostPart.replace(/:\d*$/, ""); // port plays no part in matching
+
+  let wildcard = false;
+  if (hostPart.startsWith("*.")) {
+    wildcard = true;
+    hostPart = hostPart.slice(2);
+  }
+  if (hostPart === "*" || hostPart === "") {
+    return fail("host", "Name a site — a bare * would match every page you open.");
+  }
+  if (hostPart.includes("*")) {
+    return fail("wildcard", "Only a leading “*.” wildcard is supported (e.g. *.example.com).");
+  }
+  if (!isValidHost(hostPart)) {
+    return fail("host", `“${hostPart}” isn't a valid host name.`);
+  }
+
+  path = path.replace(/\*+$/, ""); // trailing /* is implied — it's a prefix
+  if (path === "/") path = ""; // whole-site
+  if (path && !path.startsWith("/")) path = `/${path}`;
+
+  return {
+    ok: true,
+    pattern: `${wildcard ? "*." : ""}${hostPart}${path}`,
+    host: hostPart,
+    wildcard,
+    path,
+  };
+}
+
+/**
+ * How a pattern is shown to the user. Storage keeps the canonical prefix
+ * (`example.com/admin/`); the UI appends the `*` so the prefix nature is
+ * visible and round-trips back through normalizeRulePattern() unchanged.
+ */
+export function displayRulePattern(rule) {
+  if (!rule) return "";
+  const pattern = typeof rule === "string" ? rule : rule.pattern;
+  if (!pattern) return "";
+  return pattern.includes("/") ? `${pattern}*` : pattern;
+}
+
+/** True if `url` is a page a rule can match at all (http/https only). */
+export function isMatchableUrl(url) {
+  if (typeof url !== "string") return false;
+  return /^https?:\/\//i.test(url);
+}
+
+/** Does this rule's pattern match `url`? Enabled state is NOT considered here. */
+export function ruleMatchesUrl(rule, url) {
+  if (!rule || !isMatchableUrl(url)) return false;
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+
+  const host = parsed.hostname.toLowerCase();
+  if (rule.wildcard) {
+    // `*.example.com` covers the apex too — "all of example.com" is what the
+    // user means when they type it.
+    if (host !== rule.host && !host.endsWith(`.${rule.host}`)) return false;
+  } else if (host !== rule.host) {
+    return false;
+  }
+
+  if (rule.path) {
+    const p = parsed.pathname;
+    // `/admin` satisfies the prefix `/admin/` — same section of the site.
+    if (!p.startsWith(rule.path) && `${p}/` !== rule.path) return false;
+  }
+  return true;
+}
+
+/**
+ * Specificity ranking for "if several rules match one tab, the most specific
+ * match supplies the interval" (§6.1.1).
+ *
+ * The PRD glosses this as "longest pattern", which is right in the ordinary
+ * cases but inverts for an apex host: `*.example.com` is *longer* than
+ * `example.com` while being strictly broader. So an exact host outranks a
+ * wildcard first, then a longer path prefix, then pattern length as the
+ * tiebreak the PRD names.
+ */
+export function compareRuleSpecificity(a, b) {
+  if (a.wildcard !== b.wildcard) return a.wildcard ? 1 : -1;
+  if (a.path.length !== b.path.length) return b.path.length - a.path.length;
+  return b.pattern.length - a.pattern.length;
+}
+
+/** The enabled rule that should enroll `url`, or null if none matches. */
+export function bestRuleForUrl(rules, url) {
+  if (!Array.isArray(rules) || !isMatchableUrl(url)) return null;
+  const hits = rules.filter((r) => r.enabled && ruleMatchesUrl(r, url));
+  if (hits.length === 0) return null;
+  return hits.sort(compareRuleSpecificity)[0];
+}
+
+/**
+ * The pattern the popup pre-fills for "Always reload this site" (§6.1.1): the
+ * tab's origin plus its current path as a prefix. A page at the site root
+ * proposes the bare host, which is the common case (flow 7.2).
+ */
+export function proposeRulePattern(url) {
+  if (!isMatchableUrl(url)) return null;
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  const host = parsed.hostname.toLowerCase();
+  const path = parsed.pathname || "/";
+  // Directory portion of the current path — the page itself is not the unit
+  // the user is nominating, the section it lives in is.
+  const dir = path.slice(0, path.lastIndexOf("/") + 1);
+  return dir === "/" ? host : `${host}${dir}`;
+}
+
+/** The whole-site form of a proposal — backs the popup's "Whole site" shortcut. */
+export function hostOnlyPattern(url) {
+  if (!isMatchableUrl(url)) return null;
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+}
